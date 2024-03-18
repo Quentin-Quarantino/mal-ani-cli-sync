@@ -4,7 +4,7 @@ use_external_menu=0
 version="0.1"
 runas="root"
 workdir="${XDG_STATE_HOME:-$HOME/.local/state}/ani-track"
-ani_cli_hist="${XDG_STATE_HOME:-$HOME/.local/state}/ani-cli/ani-hsts-test"
+ani_cli_hist="${XDG_STATE_HOME:-$HOME/.local/state}/ani-cli/ani-hsts"
 tmpsearchf="${workdir}/search-tmp"
 tmpinfof="${workdir}/info-tmp"
 histfile="${workdir}/ani-track.hist"
@@ -181,6 +181,7 @@ search_anime() {
     DATA+="&limit=${defslimit}"
 
     curl -s "${BASE_URL}?${DATA}" -H "Authorization: Bearer ${bearer_token}" | jq . > "${tmpsearchf}"
+    echo curl -s "${BASE_URL}?${DATA}" -H "Authorization: Bearer ${bearer_token}"
 
     ## if file is empty then die 
     [ ! -s "${tmpsearchf}" ] && die "search results are empty... something went wrong. search querry was: $searchQuerry"
@@ -191,24 +192,30 @@ search_anime() {
     #result="$(awk '{$1="";print}' <<< "$(printf "%s" "$(jq -r '.data[] | .node | [.title] | join(",")' "${tmpsearchf}")" | awk '{n++ ;print NR, $0}' | sed 's/^[[:space:]]//' | nth "Select anime: ")")"
     malaniname="$(awk '{$1="";print}' <<< "$(printf "%s" "$(jq -r '.data[] | .node | [.title] | join(",")' "${tmpsearchf}")" | awk '{n++ ;print NR, $0}' | sed 's/^[[:space:]]//' | fzf --reverse --cycle --prompt "Search $2 with $1 episodes done: ")")"
     
-    if [ X"$malaniname" == X ]; then
+    if [ X"$malaniname" == X ] ; then
         echo "nothing selected, start next one"
-        break 
+    else
+        malaniname="${malaniname#"${malaniname%%[![:space:]]*}"}"
+        aniid="$(jq --arg malaniname "$malaniname" '.data[] | .node | select(.title == $malaniname) | .id' "${tmpsearchf}")"
+        aniline=("$aniid" "$2" "$1")
     fi
-
-    malaniname="${malaniname#"${malaniname%%[![:space:]]*}"}"
-    aniid="$(jq --arg malaniname "$malaniname" '.data[] | .node | select(.title == $malaniname) | .id' "${tmpsearchf}")"
-    aniline=("$aniid" "$2" "$1")
 }
 
 update_local_db() {
-    echo "${aniline[0]};${aniline[1]};${aniline[2]}"
-    if grep -qE "^${aniline[0]};${aniline[1]}" "$anitrackdb" ; then
-        sed -i "s/^${aniline[0]};${aniline[1]}.*$/${aniline[0]};${aniline[1]};${aniline[2]}/" "$anitrackdb" || die "could not update $anitrackdb"
-    else
-        echo "${aniline[0]};${aniline[1]};${aniline[2]}" >> "$anitrackdb" || die "could not update $anitrackdb"
-    fi
+    for i in "${aniline[0]}" ;do 
+        if [ X"$i" != X ] ;then
+            if grep -qE "^${aniline[0]};${aniline[1]}" "$anitrackdb" ; then
+                histupdate "SET on ${aniline[1]} with id ${aniline[0]} in local db episodes done from $ck_ldb_epdone to ${aniline[2]}"
+                sed -i "s/^${aniline[0]};${aniline[1]}.*$/${aniline[0]};${aniline[1]};${aniline[2]}/" "$anitrackdb" || die "could not update $anitrackdb"
+            else
+                histupdate "INSERT ${aniline[1]} with id ${aniline[0]} in local db. ${aniline[2]} episodes done"
+                echo "${aniline[0]};${aniline[1]};${aniline[2]}" >> "$anitrackdb" || die "could not update $anitrackdb"
+            fi
+        fi
+    done
+
     unset aniline
+    unset ck_ldb_epdone
 }
 
 
@@ -225,6 +232,13 @@ echo "Checking dependencies..."
 dep_ch "fzf" "curl" "sed" "grep" "jq" "python3" "$web_browser" ||true 
 echo -e '\e[1A\e[K'
 
+if [ X"$(grep -E "\-l[[:space:]]+[0-9]+" <<<"$@")" != X ] ;then
+    defslimit="$(grep -Eo "\-l[[:space:]]+[0-9]+" <<<"$@" |grep -Eo "[0-9]+")"
+    if [ "$defslimit" == "0" ] || [ X"$defslimit" == X ] ; then 
+        echo "set default limit: $defslimit"
+    fi
+fi
+
 ## create $workdir
 if ! mkdir -p "$workdir" ;then
     die "error: clould not run mkdir -p $workdir"
@@ -236,28 +250,35 @@ for i in "$tmpsearchf" "$tmpinfof" "$tmpredirect" ;do
 done
 trap 'rm -f -- "$tmpsearchf" "$tmpinfof" "$tmpredirect"' EXIT
 
+## create secrets if not exists 
 [ ! -s "$secrets_file" ] && create_secrets
 
+## check if there is other stuff then vars in secrets file
 check_secrets="$(grep -Ev '^([[:alpha:]_]+)=.*$|^([[:alpha:]_]+)=$|^[[:space:]]+|^$|^#' "$secrets_file")"
 
+## source if $check_secrets is epmty
 if [ -z "$check_secrets" ] ; then
     source "$secrets_file"
 else
     die "check you're secrets file becuse it can contain commands. Please remove everything thats not vars"
 fi
 
+## die when api client id and secrets is epmty
 if [ X"$client_id" == X ] || [ X"$client_secret" == X ] ;then
     die "client_id and/or client_secret are empty. please add it to $secrets_file"
 fi
 
+## die if ani-cli history is not found
 if [ ! -f "$ani_cli_hist" ] || [ ! -r "$ani_cli_hist" ] ;then
     die "ani-cli history not found in $ani_cli_hist"
 fi
 
+## create $anitrackdb or die
 if [ ! -f "$anitrackdb" ] || [ ! -r "$anitrackdb" ] ;then
     > $anitrackdb || die "could not create $anitrackdb"
 fi
 
+## check if challanger, auth code or bearer token is present or run functions to create 
 if [ X"$code_challanger" == X ] || [ X"$authorisation_code" == X ] || [ X"$bearer_token" == X ] ;then 
     create_challanger
     get_auth_code
@@ -293,17 +314,25 @@ while read -r ani; do
     ck_ldb="$(awk -F ";" -v ani="$aniname" '{if($2==ani) print $2}' "$anitrackdb")"
     ck_ldb_epdone="$(awk -F ";" -v ani="$aniname" '{if($2==ani) print $3}' "$anitrackdb")"
     ck_ldb_id="$(awk -F ";" -v ani="$aniname" '{if($2==ani) print $1}' "$anitrackdb")"
-    if [ "$ck_ldb" == "$aniname" ] && [ X"$ck_ldb_epdone" != "$epdone" ] && [ X"$ck_ldb_id" != X ];then
-        histupdate "SET on $aniname with id $ck_ldb_id in local db episodes done from $ck_ldb_epdone to $epdone"
-        sed -i "s/${ck_ldb_id};${ck_ldb}.*$/${ck_ldb_id};${ck_ldb};${epdone}/" "$anitrackdb"
+    ## if anime is already in local db
+    if [ "$ck_ldb" == "$aniname" ] && [ X"$ck_ldb_epdone" != "$epdone" ] ; then
+        if [ "$epdone" != "$ck_ldb_epdone" ] ;then
+            aniline=("${ck_ldb_id}" "${ck_ldb}" "${epdone}")
+            update_local_db
+        fi
+    ## if anime is not in local db
     elif [ X"$ck_ldb" == X ] ; then #[[ "$ck_ldb" =~ " " ]] || [[ ! "$ck_ldb" =~ ^-?[0-9]+$ ]] || [[ ! "$ck_ldb" =~ $'\n' ]];then
         search_anime "$epdone" "$aniname"
         update_local_db
-        ############ TODO CHECK IF ANIME IS TWICE AND PRINT ERROR. ELSE ADD AT THE END OF FILE
-    else
+    ## if local db has 2 entrys to the same anime, print error and continue
+    elif [[ "$ck_ldb" =~ " " ]] || [[ ! "$ck_ldb" =~ ^-?[0-9]+$ ]] || [[ ! "$ck_ldb" =~ $'\n' ]];then
         printf "error: $ani found twice or more in $anitrackdb\nplease check the $anitrackdb\n"
         histupdate "ERROR multiple enttrys found with name $aniname. please check $anitrackdb"
+        continue
     fi
+    unset ck_ldb
+    unset ck_ldb_id
+    unset ck_ldb_epdone
 done <<< "$(awk '{$2="";for (i = 1; i <= NF-2; i++) printf "%s ", $i; printf "\n"}' "$ani_cli_hist" |tr -cd '[:alnum:][:space:]\n ' |sed 's/[[:space:]]\+/ /g')"
 
 
