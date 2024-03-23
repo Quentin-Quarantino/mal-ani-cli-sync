@@ -1,5 +1,4 @@
 #!/bin/bash
-use_external_menu=0
 ## VARS
 version="0.1"
 runas="root"
@@ -57,13 +56,11 @@ Example:
 \n\n" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" 
 }
 
-## die function - usage: die "message"
 die() {
     printf "\33[2K\r\033[1;31m%s\033[0m\n" "$*" >&2
     exit 1
 }
 
-## dependency check - usage: dep_ch "dep01" "dep02" || true
 dep_ch() {
     missingdep=""
     plural=""
@@ -159,9 +156,6 @@ verify_login() {
     login_user="$(curl -sfX GET "${API_ENDPOINT}/users/@me" -H "Authorization: Bearer ${bearer_token}" |jq -r '.name'  )"
 }
 
-## hist file update 
-## usage 'histupdate "message"' 
-## insert line in history "date: message"
 histupdate() {
     dt=$(date "+%Y-%m-%d %H:%M:%S")
     histline="${dt} : $1"
@@ -178,9 +172,10 @@ search_anime() {
     
     histupdate "SEARCH $(sed 's/[[:space:]]\+-s[[:space:]]+//;s/-s //;s/ -l[[:space:]]\+[0-9]\+//;s/-l[[:space:]]\+[0-9]\+//' <<< "$2")" 
     
-    ## if search querry is empty or have double space then die  
+    ## if search querry is empty or have double space then return
     if [ X"$searchQuerry" == "X" ] || [[ "$searchQuerry" =~ ^(%20)+$ && ! "$searchQuerry" =~ %20[^%]+%20 ]] ;then
-        die "search querry is empty or trash: $searchQuerry"
+        echo "search querry is empty or trash: $searchQuerry"
+        return
     fi
 
     DATA="q=${searchQuerry}"
@@ -194,11 +189,8 @@ search_anime() {
     [ ! -s "${tmpsearchf}" ] && die "search results are empty... something went wrong. search querry was: $searchQuerry"
     ## grep in temp file for bad request and die if found 
     [ "$(grep -o "bad_request" "${tmpsearchf}")" == "bad_request" ] && die "nothing found or bad request... try again"
-    
-
     #result="$(awk '{$1="";print}' <<< "$(printf "%s" "$(jq -r '.data[] | .node | [.title] | join(",")' "${tmpsearchf}")" | awk '{n++ ;print NR, $0}' | sed 's/^[[:space:]]//' | nth "Select anime: ")")"
     malaniname="$(awk '{$1="";print}' <<< "$(printf "%s" "$(jq -r '.data[] | .node | [.title] | join(",")' "${tmpsearchf}")" | awk '{n++ ;print NR, $0}' | sed 's/^[[:space:]]//' | fzf --reverse --cycle --prompt "Search $2 with $1 episodes done: ")")"
-    
     if [ X"$malaniname" == X ] ; then
         echo "nothing selected, start next one"
     else
@@ -273,7 +265,8 @@ parse_ani-cli_hist (){
 }
 
 update_remote_db () {
-    echo $@ 
+    echo $@
+    
 }
 
 ### main
@@ -379,7 +372,7 @@ if [ X"$login_user" == X ] || [ "$check_login" != 200 ] ;then
         get_bearer_token
         verify_login
     else
-        die "please check you're api secrets"
+        die "could not login\nplease check you're api secrets"
     fi
 fi
 
@@ -398,26 +391,18 @@ for i in $(awk -F ";" '{print $1}' "$anitrackdb") ;do
     if [ X"$epdone_rdb" != X ] ;then
         ## -gt only if epdone_ldb in not empty
         if [ "$epdone_ldb" -gt "$epdone_rdb" ] || [ "$force_update" == "true" ] ;then
-            update_remote_db "$i" "$epdone_rdb"
+            update_remote_db "$i" "$epdone_ldb"
         fi
     else
-        update_remote_db "$i" "$epdone_rdb"
+        update_remote_db "$i" "$epdone_ldb"
     fi
 done
-## example history
-# grep iece .local/state/ani-cli/ani-hsts
-# 1096	ReooPAxPMsHM4KPMY	One Piece (1055 episodes)
-
-# echo '1096	ReooPAxPMsHM4KPMY	One Piece (1055 episodes)' >> ~/.local/state/ani-cli/ani-hsts
 
 
 
 
 
 
-exit 0 
 
-
-## get anime names in ani-cli histoy
-awk '{for (i = 3; i <= NF-2; i++) printf "%s ", $i; printf "\n"}' .local/state/ani-cli/ani-hsts |tr -cd '[:alnum:][:space:]\n ' |sed 's/[[:space:]]\+/ /g'
+exit 0
 
