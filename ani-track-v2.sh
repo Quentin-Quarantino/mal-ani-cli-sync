@@ -10,7 +10,8 @@ tmpinfof="${workdir}/info-tmp"
 histfile="${workdir}/ani-track.hist"
 wwwdir="${workdir}/tmp-www"
 tmpredirect="${workdir}/redirectoutput"
-secrets_file=${workdir}/.secrets
+secrets_file="${workdir}/.secrets"
+backup_dir="${workdir}/backup"
 anitrackdb="${workdir}/anidb.csv"
 defaultRedirectPort="8080"
 API_AUTH_ENDPOINT="https://myanimelist.net/v1/oauth2/"
@@ -19,16 +20,20 @@ BASE_URL="$API_ENDPOINT/anime"
 web_browser="firefox"
 timeout=120
 wspace='%20'                                        ## white space can be + or %20
-deftype="anime"                                     ## default type can be manga or anime
+deftype="anime"                                     ## default type can be at the moment only anime. the api supports also manga
 defslimit="40"
+maxlimit="1000"                                     ## max limit of the api
 deffields="id,title,num_episodes"
+nsfw="true"                                         ## needed for gray and black flagged anime like spy x famaly 2...
+bckfheader="##ID;TITLE;NUM_EPISODES_WATCHED;STATUS;SCORE"
+debug="false"                                       ## can be true/0 or false/1 | prints all history in output
+force_update="false"                                ## updates episodes to my anime list eaven if it reduces the episodes
 
 ## check if not run as root 
 if [ "$(whoami)" == "${runas}" ] ;then
     echo "script must not be runned as user $runas"
     exit 1
 fi
-
 
 ## functions
 manualPage() {
@@ -40,11 +45,8 @@ usage:
   %s [options] [query] [options]
 
 Options:
-  -s search
-  -o offline search
-  -l search limit (online)
-  -f offline fuzzy search default level is 1. agrep/tre must be installed: -f [1-9]
-  -m set to type manga
+  -[v]+ verbose levels
+  -f    force
 
 Example:
   %s -s demon slayer -l 10
@@ -163,7 +165,11 @@ verify_login() {
 histupdate() {
     dt=$(date "+%Y-%m-%d %H:%M:%S")
     histline="${dt} : $1"
-    echo "$histline" >> "$histfile"
+    if [ "$debug" == "0" ] || [ "$debug" == "true" ] ;then
+        tee -a "$histfile" <<< "$histline"
+    else
+       echo "$histline" >> "$histfile"
+    fi
 }
 
 search_anime() {
@@ -179,6 +185,7 @@ search_anime() {
 
     DATA="q=${searchQuerry}"
     DATA+="&limit=${defslimit}"
+    DATA+="$cnfsw"
 
     curl -s "${BASE_URL}?${DATA}" -H "Authorization: Bearer ${bearer_token}" | jq . > "${tmpsearchf}"
     echo curl -s "${BASE_URL}?${DATA}" -H "Authorization: Bearer ${bearer_token}"
@@ -213,13 +220,75 @@ update_local_db() {
             fi
         fi
     done
-
     unset aniline
     unset ck_ldb_epdone
 }
 
+bck_anilist(){
+    bckfile="${backup_dir}/anilist_bck_${login_user}-$(date +"%Y%m%d-%H%M")" 
+    curl -s "${API_ENDPOINT}/users/@me/animelist?fields=list_status&limit=${maxlimit}${cnfsw}" -H "Authorization: Bearer ${bearer_token}" |jq -r '.data[] | "\(.node.id);\(.node.title | sub("\""; ""; "g"));\(.list_status.num_episodes_watched);\(.list_status.status);\(.list_status.score)"' |sort > "${bckfile}_tmp"
+    echo "$bckfheader" |cat - "${bckfile}_tmp" > "${bckfile}"
+    rm -f "${bckfile}_tmp"
+    bckfiles=($(ls -1 "${backup_dir}/anilist_bck_${login_user}"* |grep "[0-9]$" |sort -r))
+    if [ "$(wc -w <<< "${bckfiles[@]}")" -ge 2 ] ;then
+        lastbckf="${bckfiles[1]}"
+        if diff -q "$lastbckf" "$bckfile" ;then
+            histupdate "no changes since last backup"
+            rm -f "$bckfile"
+            bckfile="$lastbckf"
+        else
+            histupdate "create backup of anilist to $bckfile"
+        fi
+    fi
+} 
+
+parse_ani-cli_hist (){
+    sed -i '/^$/d' "$anitrackdb"
+    while read -r ani; do
+        aniname="$(cut -d ' ' -f 2- <<< "$ani")"
+        epdone="$(cut -d ' ' -f 1 <<< "$ani")"
+        ck_ldb="$(awk -F ";" -v ani="$aniname" '{if($2==ani) print $2}' "$anitrackdb")"
+        ck_ldb_epdone="$(awk -F ";" -v ani="$aniname" '{if($2==ani) print $3}' "$anitrackdb")"
+        ck_ldb_id="$(awk -F ";" -v ani="$aniname" '{if($2==ani) print $1}' "$anitrackdb")"
+        ## if anime is already in local db
+        if [ "$ck_ldb" == "$aniname" ] && [ X"$ck_ldb_epdone" != "$epdone" ] ; then
+            if [ "$epdone" != "$ck_ldb_epdone" ] ;then
+                aniline=("${ck_ldb_id}" "${ck_ldb}" "${epdone}")
+                update_local_db
+            fi
+        ## if anime is not in local db
+        elif [ X"$ck_ldb" == X ] ; then #[[ "$ck_ldb" =~ " " ]] || [[ ! "$ck_ldb" =~ ^-?[0-9]+$ ]] || [[ ! "$ck_ldb" =~ $'\n' ]];then
+            search_anime "$epdone" "$aniname"
+            update_local_db
+        ## if local db has 2 entrys to the same anime, print error and continue
+        elif [[ "$ck_ldb" =~ " " ]] || [[ ! "$ck_ldb" =~ ^-?[0-9]+$ ]] || [[ ! "$ck_ldb" =~ $'\n' ]];then
+            printf "error: $ani found twice or more in $anitrackdb\nplease check the $anitrackdb\n"
+            histupdate "ERROR multiple enttrys found with name $aniname. please check $anitrackdb"
+            continue
+        fi
+        unset ck_ldb
+        unset ck_ldb_id
+        unset ck_ldb_epdone
+    done <<< "$(awk '{$2="";for (i = 1; i <= NF-2; i++) printf "%s ", $i; printf "\n"}' "$ani_cli_hist" |tr -cd '[:alnum:][:space:]\n ' |sed 's/[[:space:]]\+/ /g')"
+}
+
+update_remote_db () {
+    echo $@ 
+}
 
 ### main
+
+for i in "$@" ;do
+    if [ "$i" == "-v" ] ;then
+        debug="true"
+    elif [[ "$i" =~ -[v]+ ]] ;then
+        set -x
+        debug="true"
+        trap "set +x" EXIT
+    elif [ "$i" == "-f" ] ;then
+        force_update="true"
+    fi
+done
 
 ## if $@ == 'null|-h|--help' run manual and exit
 para="$(sed 's/[[:space:]]+//g' <<<"$@")"
@@ -236,11 +305,14 @@ if [ X"$(grep -E "\-l[[:space:]]+[0-9]+" <<<"$@")" != X ] ;then
     defslimit="$(grep -Eo "\-l[[:space:]]+[0-9]+" <<<"$@" |grep -Eo "[0-9]+")"
     if [ "$defslimit" == "0" ] || [ X"$defslimit" == X ] ; then 
         echo "set default limit: $defslimit"
+    elif [ "$defslimit" -gt "$maxlimit" ]; then
+        histupdate "ERROR search limit of the api is $maxlimit"
+        defslimit="$maxlimite"
     fi
 fi
 
 ## create $workdir
-if ! mkdir -p "$workdir" ;then
+if ! mkdir -p "$backup_dir" ;then
     die "error: clould not run mkdir -p $workdir"
 fi
 
@@ -278,6 +350,12 @@ if [ ! -f "$anitrackdb" ] || [ ! -r "$anitrackdb" ] ;then
     > $anitrackdb || die "could not create $anitrackdb"
 fi
 
+if [ "$nsfw" == "true" ] || [ "$nfsw" == "0" ] ;then
+    cnfsw="&nsfw=true"
+else
+    cnfsw=""
+fi
+
 ## check if challanger, auth code or bearer token is present or run functions to create 
 if [ X"$code_challanger" == X ] || [ X"$authorisation_code" == X ] || [ X"$bearer_token" == X ] ;then 
     create_challanger
@@ -307,35 +385,25 @@ fi
 
 printf "login successfull\nhi $login_user\n\n"
 
-sed -i '/^$/d' "$anitrackdb"
-while read -r ani; do
-    aniname="$(cut -d ' ' -f 2- <<< "$ani")"
-    epdone="$(cut -d ' ' -f 1 <<< "$ani")"
-    ck_ldb="$(awk -F ";" -v ani="$aniname" '{if($2==ani) print $2}' "$anitrackdb")"
-    ck_ldb_epdone="$(awk -F ";" -v ani="$aniname" '{if($2==ani) print $3}' "$anitrackdb")"
-    ck_ldb_id="$(awk -F ";" -v ani="$aniname" '{if($2==ani) print $1}' "$anitrackdb")"
-    ## if anime is already in local db
-    if [ "$ck_ldb" == "$aniname" ] && [ X"$ck_ldb_epdone" != "$epdone" ] ; then
-        if [ "$epdone" != "$ck_ldb_epdone" ] ;then
-            aniline=("${ck_ldb_id}" "${ck_ldb}" "${epdone}")
-            update_local_db
+bck_anilist
+parse_ani-cli_hist
+
+for i in $(awk -F ";" '{print $1}' "$anitrackdb") ;do 
+    echo "i is $i"
+    epdone_ldb="$(awk -F ";" -v id="$i" '{if(id==$1) print $3}' "$anitrackdb")"
+    epdone_rdb="$(awk -F ";" -v id="$i" '{if(id==$1) print $3}' "$bckfile")"
+    echo "epdone_rdb is $epdone_rdb"
+    echo "epdone_ldb is $epdone_ldb"
+    echo  
+    if [ X"$epdone_rdb" != X ] ;then
+        ## -gt only if epdone_ldb in not empty
+        if [ "$epdone_ldb" -gt "$epdone_rdb" ] || [ "$force_update" == "true" ] ;then
+            update_remote_db "$i" "$epdone_rdb"
         fi
-    ## if anime is not in local db
-    elif [ X"$ck_ldb" == X ] ; then #[[ "$ck_ldb" =~ " " ]] || [[ ! "$ck_ldb" =~ ^-?[0-9]+$ ]] || [[ ! "$ck_ldb" =~ $'\n' ]];then
-        search_anime "$epdone" "$aniname"
-        update_local_db
-    ## if local db has 2 entrys to the same anime, print error and continue
-    elif [[ "$ck_ldb" =~ " " ]] || [[ ! "$ck_ldb" =~ ^-?[0-9]+$ ]] || [[ ! "$ck_ldb" =~ $'\n' ]];then
-        printf "error: $ani found twice or more in $anitrackdb\nplease check the $anitrackdb\n"
-        histupdate "ERROR multiple enttrys found with name $aniname. please check $anitrackdb"
-        continue
+    else
+        update_remote_db "$i" "$epdone_rdb"
     fi
-    unset ck_ldb
-    unset ck_ldb_id
-    unset ck_ldb_epdone
-done <<< "$(awk '{$2="";for (i = 1; i <= NF-2; i++) printf "%s ", $i; printf "\n"}' "$ani_cli_hist" |tr -cd '[:alnum:][:space:]\n ' |sed 's/[[:space:]]\+/ /g')"
-
-
+done
 ## example history
 # grep iece .local/state/ani-cli/ani-hsts
 # 1096	ReooPAxPMsHM4KPMY	One Piece (1055 episodes)
