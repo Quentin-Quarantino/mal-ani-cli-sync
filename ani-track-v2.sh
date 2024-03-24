@@ -293,11 +293,13 @@ for i in "$@" ;do
 done
 
 ## if $@ == 'null|-h|--help' run manual and exit
-para="$(sed 's/[[:space:]]+//g' <<< "$@")"
-if [[ "$para" == "-h" || "$para" == "--help" || "$para" == "--" || "$para" == "--h" ]] ; then
-    manualPage
-    exit 0
-fi
+#para="$(sed 's/[[:space:]]+//g' <<< "$@")"
+for i in "$@" ;do
+    if [[ "$i" == "-h" || "$i" == "--help" || "$i" == "--" || "$i" == "--h" ]] ; then
+        manualPage
+        exit 0
+    fi
+done 
 
 echo "Checking dependencies..."
 dep_ch "fzf" "curl" "sed" "grep" "jq" "python3" "$web_browser" ||true 
