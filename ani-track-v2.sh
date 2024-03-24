@@ -1,4 +1,6 @@
 #!/bin/bash
+# shellcheck source=/dev/null
+# shellcheck disable=SC2034
 ## VARS
 version="0.1"
 runas="root"
@@ -13,13 +15,13 @@ secrets_file="${workdir}/.secrets"
 backup_dir="${workdir}/backup"
 anitrackdb="${workdir}/anidb.csv"
 defaultRedirectPort="8080"
+deftype="anime"                                     ## default type can be at the moment only anime. the api supports also manga
 API_AUTH_ENDPOINT="https://myanimelist.net/v1/oauth2/"
 API_ENDPOINT="https://api.myanimelist.net/v2"
-BASE_URL="$API_ENDPOINT/anime"
+BASE_URL="$API_ENDPOINT/${deftype}"
 web_browser="firefox"
 timeout=120
 wspace='%20'                                        ## white space can be + or %20
-deftype="anime"                                     ## default type can be at the moment only anime. the api supports also manga
 defslimit="40"
 maxlimit="1000"                                     ## max limit of the api
 deffields="id,title,num_episodes"
@@ -27,6 +29,14 @@ nsfw="true"                                         ## needed for gray and black
 bckfheader="##ID;TITLE;NUM_EPISODES_WATCHED;STATUS;SCORE"
 debug="false"                                       ## can be true/0 or false/1 | prints all history in output
 force_update="false"                                ## updates episodes to my anime list eaven if it reduces the episodes
+
+## do set the vars in the .secrets file. only for shellcheck https://www.shellcheck.net/wiki/SC2154
+authorisation_code=""
+client_secret=""
+refresh_token=""
+bearer_token=""
+client_id=""
+code_challanger=""
 
 ## check if not run as root 
 if [ "$(whoami)" == "${runas}" ] ;then
@@ -82,7 +92,7 @@ dep_ch() {
 }
 
 create_secrets() {
-    > "$secrets_file" || die "could not create secrets file: touch $secrets_file"
+    touch "$secrets_file" || die "could not create secrets file: touch $secrets_file"
     printf "client_id=\nclient_secret=\ncode_challanger=\nauthorisation_code=\nbearer_token=\nrefresh_token=\n" > "$secrets_file" 
     die "add you're api client id and the secret in the $secrets_file and re-run the script"
 }
@@ -95,17 +105,17 @@ create_challanger() {
 }
 
 get_auth_code() {
-    > "$tmpredirect"
+    touch "$tmpredirect"
     mkdir "$wwwdir"
-    printf "<html>\n<body>\n<h1>Verification Succeeded!</h1>\n<p>Close this browser tab and you may now return to the shell.</p>\n</body>\n</html>\n" > ${wwwdir}/index.html
+    printf "<html>\n<body>\n<h1>Verification Succeeded!</h1>\n<p>Close this browser tab and you may now return to the shell.</p>\n</body>\n</html>\n" > "${wwwdir}"/index.html
     trap 'rm -rf -- "$wwwdir"' EXIT
     auth_url="${API_AUTH_ENDPOINT}authorize?response_type=code&client_id=${client_id}&code_challenge=${code_challanger}"
     python3 -m http.server -d "$wwwdir" $defaultRedirectPort > "$tmpredirect" 2>&1 &
     wserver_pid="$!"
-    "$web_browser" "$auth_url" 2>&1 >/dev/null
+    "$web_browser" "$auth_url" >/dev/null 2>&1
     echo -e "please authenticate in the web browser and press enter after allow it"
-    read -r -t "$timeout" answer
-    unset answer
+    read -r -t "$timeout" _
+    unset _
     kill "$wserver_pid"
     check_www_srv="$(grep -i "Address already in use" "$tmpredirect")"
 
@@ -183,8 +193,6 @@ search_anime() {
     DATA+="$cnfsw"
 
     curl -s "${BASE_URL}?${DATA}" -H "Authorization: Bearer ${bearer_token}" | jq . > "${tmpsearchf}"
-    echo curl -s "${BASE_URL}?${DATA}" -H "Authorization: Bearer ${bearer_token}"
-
     ## if file is empty then die 
     [ ! -s "${tmpsearchf}" ] && die "search results are empty... something went wrong. search querry was: $searchQuerry"
     ## grep in temp file for bad request and die if found 
@@ -201,7 +209,7 @@ search_anime() {
 }
 
 update_local_db() {
-    for i in "${aniline[0]}" ;do 
+    for i in ${aniline[0]} ;do 
         if [ X"$i" != X ] ;then
             if grep -qE "^${aniline[0]};${aniline[1]}" "$anitrackdb" ; then
                 histupdate "SET on ${aniline[1]} with id ${aniline[0]} in local db episodes done from $ck_ldb_epdone to ${aniline[2]}"
@@ -221,7 +229,8 @@ bck_anilist(){
     curl -s "${API_ENDPOINT}/users/@me/animelist?fields=list_status&limit=${maxlimit}${cnfsw}" -H "Authorization: Bearer ${bearer_token}" |jq -r '.data[] | "\(.node.id);\(.node.title | sub("\""; ""; "g"));\(.list_status.num_episodes_watched);\(.list_status.status);\(.list_status.score)"' |sort > "${bckfile}_tmp"
     echo "$bckfheader" |cat - "${bckfile}_tmp" > "${bckfile}"
     rm -f "${bckfile}_tmp"
-    bckfiles=($(ls -1 "${backup_dir}/anilist_bck_${login_user}"* |grep "[0-9]$" |sort -r))
+#    bckfiles=($(ls -1 "${backup_dir}/anilist_bck_${login_user}"* |grep "[0-9]$" |sort -r))
+    mapfile -t bckfiles < <(find "${backup_dir}" -maxdepth 1 -type f -name "anilist_bck_${login_user}*" -regex '.*[0-9]+$' -print0 | sort -rz)
     if [ "$(wc -w <<< "${bckfiles[@]}")" -ge 2 ] ;then
         lastbckf="${bckfiles[1]}"
         if diff -q "$lastbckf" "$bckfile" ;then
@@ -254,7 +263,7 @@ parse_ani-cli_hist (){
             update_local_db
         ## if local db has 2 entrys to the same anime, print error and continue
         elif [[ "$ck_ldb" =~ " " ]] || [[ ! "$ck_ldb" =~ ^-?[0-9]+$ ]] || [[ ! "$ck_ldb" =~ $'\n' ]];then
-            printf "error: $ani found twice or more in $anitrackdb\nplease check the $anitrackdb\n"
+            printf "%s" "error: $ani found twice or more in $anitrackdb\nplease check the $anitrackdb\n"
             histupdate "ERROR multiple enttrys found with name $aniname. please check $anitrackdb"
             continue
         fi
@@ -265,7 +274,7 @@ parse_ani-cli_hist (){
 }
 
 update_remote_db () {
-    echo $@
+    echo "$@"
     
 }
 
@@ -284,11 +293,11 @@ for i in "$@" ;do
 done
 
 ## if $@ == 'null|-h|--help' run manual and exit
-para="$(sed 's/[[:space:]]+//g' <<<"$@")"
-#if [[ -z "$para" || "$para" == "-h" || "$para" == "--help" || "$para" == "--" || "$para" == "--h" ]] ; then
-#    manualPage
-#    exit 0
-#fi
+para="$(sed 's/[[:space:]]+//g' <<< "$@")"
+if [[ "$para" == "-h" || "$para" == "--help" || "$para" == "--" || "$para" == "--h" ]] ; then
+    manualPage
+    exit 0
+fi
 
 echo "Checking dependencies..."
 dep_ch "fzf" "curl" "sed" "grep" "jq" "python3" "$web_browser" ||true 
@@ -300,7 +309,7 @@ if [ X"$(grep -E "\-l[[:space:]]+[0-9]+" <<<"$@")" != X ] ;then
         echo "set default limit: $defslimit"
     elif [ "$defslimit" -gt "$maxlimit" ]; then
         histupdate "ERROR search limit of the api is $maxlimit"
-        defslimit="$maxlimite"
+        defslimit="$maxlimit"
     fi
 fi
 
@@ -311,7 +320,7 @@ fi
 
 ## create temp files and trap for cleanup
 for i in "$tmpsearchf" "$tmpinfof" "$tmpredirect" ;do 
-    > "$i" || die "could not create temp file: touch $i"
+    touch "$i" || die "could not create temp file: touch $i"
 done
 trap 'rm -f -- "$tmpsearchf" "$tmpinfof" "$tmpredirect"' EXIT
 
@@ -340,10 +349,10 @@ fi
 
 ## create $anitrackdb or die
 if [ ! -f "$anitrackdb" ] || [ ! -r "$anitrackdb" ] ;then
-    > $anitrackdb || die "could not create $anitrackdb"
+    touch "$anitrackdb" || die "could not create $anitrackdb"
 fi
 
-if [ "$nsfw" == "true" ] || [ "$nfsw" == "0" ] ;then
+if [ "$nsfw" == "true" ] || [ "$nsfw" == "0" ] ;then
     cnfsw="&nsfw=true"
 else
     cnfsw=""
@@ -376,18 +385,18 @@ if [ X"$login_user" == X ] || [ "$check_login" != 200 ] ;then
     fi
 fi
 
-printf "login successfull\nhi $login_user\n\n"
+printf "%s" "login successfull\nhi $login_user\n\n"
 
 bck_anilist
 parse_ani-cli_hist
 
-for i in $(awk -F ";" '{print $1}' "$anitrackdb") ;do 
-    echo "i is $i"
+awk -F ";" '{print $1}' "$anitrackdb"| while IFS= read -r i ;do 
+    #echo "i is $i"
     epdone_ldb="$(awk -F ";" -v id="$i" '{if(id==$1) print $3}' "$anitrackdb")"
     epdone_rdb="$(awk -F ";" -v id="$i" '{if(id==$1) print $3}' "$bckfile")"
-    echo "epdone_rdb is $epdone_rdb"
-    echo "epdone_ldb is $epdone_ldb"
-    echo  
+    #echo "epdone_rdb is $epdone_rdb"
+    #echo "epdone_ldb is $epdone_ldb"
+    #echo  
     if [ X"$epdone_rdb" != X ] ;then
         ## -gt only if epdone_ldb in not empty
         if [ "$epdone_ldb" -gt "$epdone_rdb" ] || [ "$force_update" == "true" ] ;then
