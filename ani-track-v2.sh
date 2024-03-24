@@ -30,14 +30,6 @@ bckfheader="##ID;TITLE;NUM_EPISODES_WATCHED;STATUS;SCORE"
 debug="false"                                       ## can be true/0 or false/1 | prints all history in output
 force_update="false"                                ## updates episodes to my anime list eaven if it reduces the episodes
 
-## do set the vars in the .secrets file. only for shellcheck https://www.shellcheck.net/wiki/SC2154
-authorisation_code=""
-client_secret=""
-refresh_token=""
-bearer_token=""
-client_id=""
-code_challanger=""
-
 ## check if not run as root 
 if [ "$(whoami)" == "${runas}" ] ;then
     echo "script must not be runned as user $runas"
@@ -94,7 +86,7 @@ dep_ch() {
 create_secrets() {
     touch "$secrets_file" || die "could not create secrets file: touch $secrets_file"
     printf "client_id=\nclient_secret=\ncode_challanger=\nauthorisation_code=\nbearer_token=\nrefresh_token=\n" > "$secrets_file" 
-    die "add you're api client id and the secret in the $secrets_file and re-run the script"
+    die "add your api client id and the secret in the $secrets_file and re-run the script"
 }
 
 create_challanger() {
@@ -118,11 +110,9 @@ get_auth_code() {
     unset _
     kill "$wserver_pid"
     check_www_srv="$(grep -i "Address already in use" "$tmpredirect")"
-
     if [ X"$check_www_srv" != X ] ;then 
         echo "web server port was already in use"
         die "please check with 'sudo netstat -tlpn || sudo ss -tlpn' if there is a service on port $defaultRedirectPort"
-        
     fi
     auth_code="$(grep GET "$tmpredirect" |awk '{print $(NF-3)}' |awk -F= '{print $NF}' |tail -1)"
     if [ X"$auth_code" == X ] || [ "$(wc -w <<< "$auth_code")" -ne 1 ] || [ "${#auth_code}" -lt 128 ] ; then 
@@ -224,15 +214,15 @@ update_local_db() {
     unset ck_ldb_epdone
 }
 
-bck_anilist(){
+bck_anilist() {
     bckfile="${backup_dir}/anilist_bck_${login_user}-$(date +"%Y%m%d-%H%M")" 
     curl -s "${API_ENDPOINT}/users/@me/animelist?fields=list_status&limit=${maxlimit}${cnfsw}" -H "Authorization: Bearer ${bearer_token}" |jq -r '.data[] | "\(.node.id);\(.node.title | sub("\""; ""; "g"));\(.list_status.num_episodes_watched);\(.list_status.status);\(.list_status.score)"' |sort > "${bckfile}_tmp"
     echo "$bckfheader" |cat - "${bckfile}_tmp" > "${bckfile}"
     rm -f "${bckfile}_tmp"
 #    bckfiles=($(ls -1 "${backup_dir}/anilist_bck_${login_user}"* |grep "[0-9]$" |sort -r))
-    mapfile -t bckfiles < <(find "${backup_dir}" -maxdepth 1 -type f -name "anilist_bck_${login_user}*" -regex '.*[0-9]+$' -print0 | sort -rz)
+    mapfile -t bckfiles < <(find "${backup_dir}" -maxdepth 1 -type f -name "anilist_bck_${login_user}*" -regex '.*[0-9]+$' -printf "%p\n" | sort -r)
     if [ "$(wc -w <<< "${bckfiles[@]}")" -ge 2 ] ;then
-        lastbckf="${bckfiles[1]}"
+        lastbckf="${bckfiles[2]}"
         if diff -q "$lastbckf" "$bckfile" ;then
             histupdate "no changes since last backup"
             rm -f "$bckfile"
@@ -243,7 +233,7 @@ bck_anilist(){
     fi
 } 
 
-parse_ani-cli_hist (){
+parse_ani-cli_hist() {
     sed -i '/^$/d' "$anitrackdb"
     while read -r ani; do
         aniname="$(cut -d ' ' -f 2- <<< "$ani")"
@@ -273,12 +263,45 @@ parse_ani-cli_hist (){
     done <<< "$(awk '{$2="";for (i = 1; i <= NF-2; i++) printf "%s ", $i; printf "\n"}' "$ani_cli_hist" |tr -cd '[:alnum:][:space:]\n ' |sed 's/[[:space:]]\+/ /g')"
 }
 
-update_remote_db () {
-    echo "$@"
-    
+update_remote_db() {
+    unset DATA
+    DATA=" -d num_watched_episodes=${2}"
+    [ -n "$3" ] && DATA+=" -d status=${3}"
+    [ -n "$4" ] && DATA+=" -d score=${4}"
+# shellcheck disable=SC2086
+    update_on_mal="$(curl -s -o /dev/null -w "%{http_code}" -X PUT "${BASE_URL}/${1}/my_list_status" $DATA -H "Authorization: Bearer ${bearer_token}" --data-urlencode 'score=8')"
+    if [ "$update_on_mal" != "200" ] ;then
+        die "could not update anime with id $1 on mal"
+    fi
+}
+
+restore_from_bck() {
+    die "not implemented yet."
+}
+
+update_script() {
+    die "not implemented yet."
+}
+
+compare_mal_to_ldb() {
+    awk -F ";" '{print $1}' "$anitrackdb"| while IFS= read -r i ;do 
+        epdone_ldb="$(awk -F ";" -v id="$i" '{if(id==$1) print $3}' "$anitrackdb")"
+        epdone_rdb="$(awk -F ";" -v id="$i" '{if(id==$1) print $3}' "$bckfile")"
+        if [ X"$epdone_rdb" != X ] ;then
+            ## -gt only if epdone_ldb in not empty
+            if [ "$epdone_ldb" -gt "$epdone_rdb" ] || [ "$force_update" == "true" ] ;then
+                 update_remote_db "$i" "$epdone_ldb"
+            fi
+        else
+            update_remote_db "$i" "$epdone_ldb"
+        fi
+    done
 }
 
 ### main
+
+## do set the vars in the .secrets file. only for shellcheck https://www.shellcheck.net/wiki/SC2154
+authorisation_code="" ;client_secret="" ;refresh_token="" ;bearer_token="" ;client_id="" ;code_challanger=""
 
 for i in "$@" ;do
     if [ "$i" == "-v" ] ;then
@@ -387,33 +410,27 @@ if [ X"$login_user" == X ] || [ "$check_login" != 200 ] ;then
     fi
 fi
 
-printf "%s" "login successfull\nhi $login_user\n\n"
+echo -e "login successfull\nhi $login_user"
 
 bck_anilist
 parse_ani-cli_hist
 
-awk -F ";" '{print $1}' "$anitrackdb"| while IFS= read -r i ;do 
-    #echo "i is $i"
-    epdone_ldb="$(awk -F ";" -v id="$i" '{if(id==$1) print $3}' "$anitrackdb")"
-    epdone_rdb="$(awk -F ";" -v id="$i" '{if(id==$1) print $3}' "$bckfile")"
-    #echo "epdone_rdb is $epdone_rdb"
-    #echo "epdone_ldb is $epdone_ldb"
-    #echo  
-    if [ X"$epdone_rdb" != X ] ;then
-        ## -gt only if epdone_ldb in not empty
-        if [ "$epdone_ldb" -gt "$epdone_rdb" ] || [ "$force_update" == "true" ] ;then
-            update_remote_db "$i" "$epdone_ldb"
-        fi
-    else
-        update_remote_db "$i" "$epdone_ldb"
-    fi
+while getopts "uUr" opt ;do
+    case $opt in
+        u)
+            compare_mal_to_ldb
+            ;;
+        U)
+            update_script
+            ;;
+        r)
+            restore_from_bck
+            ;;
+        ?)
+            manualPage
+            die "ERROR: invalid option -$OPTARG"
+            ;;
+    esac
 done
-
-
-
-
-
-
-
 exit 0
 
