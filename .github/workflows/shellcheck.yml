@@ -15,7 +15,10 @@ jobs:
 
     steps:
     - name: Check out code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
+
+    - name: List files
+      run: ls -l
 
     - name: Ensure script is executable
       run: |
