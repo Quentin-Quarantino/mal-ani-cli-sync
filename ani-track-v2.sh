@@ -268,6 +268,7 @@ update_remote_db() {
     DATA=" -d num_watched_episodes=${2}"
     [ -n "$3" ] && DATA+=" -d status=${3}"
     [ -n "$4" ] && DATA+=" -d score=${4}"
+## disable SC2086 on this line becuse of $DATA should not be in quotes. otherwise the anime can't be updated
 # shellcheck disable=SC2086
     update_on_mal="$(curl -s -o /dev/null -w "%{http_code}" -X PUT "${BASE_URL}/${1}/my_list_status" $DATA -H "Authorization: Bearer ${bearer_token}" --data-urlencode 'score=8')"
     if [ "$update_on_mal" != "200" ] ;then
