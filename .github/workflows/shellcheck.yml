@@ -1,28 +1,27 @@
 name: 'Shellcheck'
+
 on:
   push:
-    branches:
-      - main
+    paths:
+      - 'ani-track.sh'
   pull_request:
-    paths: 
-      - "**ani-track.sh"
+    paths:
+      - 'ani-track.sh'
 
 jobs:
   shellcheck:
-    name: Shellcheck + Shfmt
+    name: Lint Shell Scripts
     runs-on: ubuntu-latest
+
     steps:
-    - uses: actions/checkout@v3
-    - name: Run the sh-checker
-      uses: luizm/action-sh-checker@master
-        #      env:
-        #SHELLCHECK_OPTS: -s sh -o all -e 2250
-        #SHFMT_OPTS: -i 4 -ci -d
-      
-  check-exec:
-    name: Executable Bit
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - name: test exec bit
-      run: test -x "./ani-track.sh"
+    - name: Check out code
+      uses: actions/checkout@v3
+
+    - name: Ensure script is executable
+      run: |
+        chmod +x ani-track.sh
+
+    - name: Run ShellCheck on myscript.sh
+      run: |
+        sudo apt-get install shellcheck
+        shellcheck ani-track.sh
