@@ -6,7 +6,7 @@ on:
       - main
   pull_request:
     paths:
-      - '**ani-track.sh'
+      - '**ani-track-v2.sh'
 
 jobs:
   shellcheck:
@@ -17,14 +17,11 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4
 
-    - name: List files
-      run: ls -l
-
     - name: Ensure script is executable
       run: |
-        chmod +x "./ani-track.sh"
+        chmod +x "./ani-track-v2.sh"
 
     - name: Run ShellCheck on myscript.sh
       run: |
         sudo apt-get install shellcheck
-        shellcheck "./ani-track.sh"
+        shellcheck "./ani-track-v2.sh"
