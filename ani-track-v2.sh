@@ -223,7 +223,7 @@ bck_anilist() {
     mapfile -t bckfiles < <(find "${backup_dir}" -maxdepth 1 -type f -name "anilist_bck_${login_user}*" -regex '.*[0-9]+$' -printf "%p\n" | sort -r)
     if [ "$(wc -w <<< "${bckfiles[@]}")" -ge 2 ] ;then
         lastbckf="${bckfiles[2]}"
-        if diff -q "$lastbckf" "$bckfile" ;then
+        if diff -q "$lastbckf" "$bckfile" >/dev/null 2>&1 ;then
             histupdate "no changes since last backup"
             rm -f "$bckfile"
             bckfile="$lastbckf"
