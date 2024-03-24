@@ -2,11 +2,11 @@ name: 'Shellcheck'
 
 on:
   push:
-    paths:
-      - 'ani-track.sh'
+    branches:
+      - main
   pull_request:
     paths:
-      - 'ani-track.sh'
+      - '**ani-track.sh'
 
 jobs:
   shellcheck:
