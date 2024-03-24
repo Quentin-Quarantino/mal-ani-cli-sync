@@ -15,13 +15,13 @@ jobs:
 
     steps:
     - name: Check out code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v2
 
     - name: Ensure script is executable
       run: |
-        chmod +x ani-track.sh
+        chmod +x "./ani-track.sh"
 
     - name: Run ShellCheck on myscript.sh
       run: |
         sudo apt-get install shellcheck
-        shellcheck ani-track.sh
+        shellcheck "./ani-track.sh"
