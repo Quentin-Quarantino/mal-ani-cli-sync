@@ -1,5 +1,5 @@
 # ani-track
-ani-track is a shell script to update animes on myanimelist from the ani-cli history
+ani-track is a shell script to update animes on myanimelist from the [ani-cli](https://github.com/pystardust/ani-cli/tree/master) watch history
 
 **The script is not fully developed. use at your own risk**
 
