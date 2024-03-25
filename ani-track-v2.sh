@@ -1,6 +1,6 @@
 #!/bin/bash
 # shellcheck source=/dev/null
-# shellcheck disable=SC2034
+#
 ## VARS
 version="0.1"
 runas="root"
@@ -14,7 +14,7 @@ tmpredirect="${workdir}/redirectoutput"
 secrets_file="${workdir}/.secrets"
 backup_dir="${workdir}/backup"
 anitrackdb="${workdir}/anidb.csv"
-defaultRedirectPort="8080"
+redirectPort="8080"
 deftype="anime"                                     ## default type can be at the moment only anime. the api supports also manga
 API_AUTH_ENDPOINT="https://myanimelist.net/v1/oauth2/"
 API_ENDPOINT="https://api.myanimelist.net/v2"
@@ -23,8 +23,7 @@ web_browser="firefox"
 timeout=120
 wspace='%20'                                        ## white space can be + or %20
 defslimit="40"
-maxlimit="1000"                                     ## max limit of the api
-deffields="id,title,num_episodes"
+maxlimit="1000"                                     ## max limit of the api for anime recomendations its 100 atm
 nsfw="true"                                         ## needed for gray and black flagged anime like spy x famaly 2...
 bckfheader="##ID;TITLE;NUM_EPISODES_WATCHED;STATUS;SCORE"
 debug="false"                                       ## can be true/0 or false/1 | prints all history in output
@@ -73,7 +72,6 @@ dep_ch() {
             else
                 plural="s"
                 missingdep+=" $dep"
-
             fi
         fi
     done
@@ -102,7 +100,7 @@ get_auth_code() {
     printf "<html>\n<body>\n<h1>Verification Succeeded!</h1>\n<p>Close this browser tab and you may now return to the shell.</p>\n</body>\n</html>\n" > "${wwwdir}"/index.html
     trap 'rm -rf -- "$wwwdir"' EXIT
     auth_url="${API_AUTH_ENDPOINT}authorize?response_type=code&client_id=${client_id}&code_challenge=${code_challanger}"
-    python3 -m http.server -d "$wwwdir" $defaultRedirectPort > "$tmpredirect" 2>&1 &
+    python3 -m http.server -d "$wwwdir" $redirectPort > "$tmpredirect" 2>&1 &
     wserver_pid="$!"
     "$web_browser" "$auth_url" >/dev/null 2>&1
     echo -e "please authenticate in the web browser and press enter after allow it"
@@ -111,8 +109,8 @@ get_auth_code() {
     kill "$wserver_pid"
     check_www_srv="$(grep -i "Address already in use" "$tmpredirect")"
     if [ X"$check_www_srv" != X ] ;then 
-        echo "web server port was already in use"
-        die "please check with 'sudo netstat -tlpn || sudo ss -tlpn' if there is a service on port $defaultRedirectPort"
+        echo "$redirectPort port was already in use"
+        die "please check with 'sudo netstat -tlpn || sudo ss -4 -tlpn' if there is a service on port $redirectPort"
     fi
     auth_code="$(grep GET "$tmpredirect" |awk '{print $(NF-3)}' |awk -F= '{print $NF}' |tail -1)"
     if [ X"$auth_code" == X ] || [ "$(wc -w <<< "$auth_code")" -ne 1 ] || [ "${#auth_code}" -lt 128 ] ; then 
@@ -167,6 +165,7 @@ histupdate() {
 }
 
 search_anime() {
+    [ X"$slimit" == X ]&& slimit="$defslimit"
     ## prepare search querry: remove other options and double spaces etc
     searchQuerry="$(sed "s/[[:space:]]\+-s[[:space:]]+//;s/-s //;s/ -l[[:space:]]\+[0-9]\+//;s/-o[[:space:]]+//;s/-l[[:space:]]\+[0-9]\+//;s/[[:space:]]\+/ /g;s/[[:space:]]/$wspace/g" <<< "$2")"
     
@@ -179,7 +178,7 @@ search_anime() {
     fi
 
     DATA="q=${searchQuerry}"
-    DATA+="&limit=${defslimit}"
+    DATA+="&limit=${slimit}"
     DATA+="$cnfsw"
 
     curl -s "${BASE_URL}?${DATA}" -H "Authorization: Bearer ${bearer_token}" | jq . > "${tmpsearchf}"
@@ -277,6 +276,7 @@ update_remote_db() {
 }
 
 restore_from_bck() {
+    echo "$lastbckf"
     die "not implemented yet."
 }
 
@@ -288,15 +288,22 @@ compare_mal_to_ldb() {
     awk -F ";" '{print $1}' "$anitrackdb"| while IFS= read -r i ;do 
         epdone_ldb="$(awk -F ";" -v id="$i" '{if(id==$1) print $3}' "$anitrackdb")"
         epdone_rdb="$(awk -F ";" -v id="$i" '{if(id==$1) print $3}' "$bckfile")"
+        aniname="$(awk -F ";" -v id="$i" '{if(id==$1) print $2}' "$anitrackdb")"
         if [ X"$epdone_rdb" != X ] ;then
             ## -gt only if epdone_ldb in not empty
             if [ "$epdone_ldb" -gt "$epdone_rdb" ] || [ "$force_update" == "true" ] ;then
+                 echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done"
                  update_remote_db "$i" "$epdone_ldb"
             fi
         else
+            echo "MAL add anime $aniname with id $i and $epdone_ldb episodes done"
             update_remote_db "$i" "$epdone_ldb"
         fi
     done
+}
+
+get_recomendations() {
+    die "not implemented yet."
 }
 
 ### main
@@ -311,8 +318,6 @@ for i in "$@" ;do
         set -x
         debug="true"
         trap "set +x" EXIT
-    elif [ "$i" == "-f" ] ;then
-        force_update="true"
     fi
 done
 
@@ -328,16 +333,6 @@ done
 echo "Checking dependencies..."
 dep_ch "fzf" "curl" "sed" "grep" "jq" "python3" "$web_browser" ||true 
 echo -e '\e[1A\e[K'
-
-if [ X"$(grep -E "\-l[[:space:]]+[0-9]+" <<<"$@")" != X ] ;then
-    defslimit="$(grep -Eo "\-l[[:space:]]+[0-9]+" <<<"$@" |grep -Eo "[0-9]+")"
-    if [ "$defslimit" == "0" ] || [ X"$defslimit" == X ] ; then 
-        echo "set default limit: $defslimit"
-    elif [ "$defslimit" -gt "$maxlimit" ]; then
-        histupdate "ERROR search limit of the api is $maxlimit"
-        defslimit="$maxlimit"
-    fi
-fi
 
 ## create $workdir
 if ! mkdir -p "$backup_dir" ;then
@@ -416,16 +411,34 @@ echo -e "login successfull\nhi $login_user"
 bck_anilist
 parse_ani-cli_hist
 
-while getopts "uUr" opt ;do
+while getopts "fl:urUR:" opt ;do
     case $opt in
+        f)
+            force_update="true"
+            ;;
+        l)
+            slimit="$(grep -Eo "[0-9]+" <<< "OPTARG$")"
+            if [ "$slimit" != "0" ] || [ X"$slimit" == X ] ; then
+                echo "set search limit: $slimit"
+            elif [ "$slimit" -gt "$maxlimit" ]; then
+                histupdate "ERROR search limit of the api is $maxlimit"
+                defslimit="$maxlimit"
+            else
+                slimit="$defslimit"
+            fi
+            ;;
         u)
             compare_mal_to_ldb
+            ;;
+        r)
+            maxlimit="${maxlimit:0:3}"
+            get_recomendations
             ;;
         U)
             update_script
             ;;
-        r)
-            restore_from_bck
+        R)
+            restore_from_bck "$OPTARG"
             ;;
         ?)
             manualPage
@@ -434,4 +447,3 @@ while getopts "uUr" opt ;do
     esac
 done
 exit 0
-

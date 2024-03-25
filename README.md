@@ -12,3 +12,4 @@ ani-track is a shell script to update animes on myanimelist from the [ani-cli](h
 - [ ] change script name
 - [ ] update script function
 - [ ] readme.md, dev and protected main/master branch
+- [ ] anime recomendations based on watchlist
