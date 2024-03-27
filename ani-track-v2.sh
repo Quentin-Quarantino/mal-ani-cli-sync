@@ -25,7 +25,8 @@ wspace='%20'                                        ## white space can be + or %
 defslimit="40"
 maxlimit="1000"                                     ## max limit of the api for anime recomendations its 100 atm
 nsfw="true"                                         ## needed for gray and black flagged anime like spy x famaly 2...
-bckfheader="##ID;TITLE;NUM_EPISODES_WATCHED;STATUS;SCORE"
+csvseparator="|"                                    ## ; does not work becuse of "steins;gate"
+bckfheader="##ID${csvseparator}TITLE${csvseparator}NUM_EPISODES_WATCHED${csvseparator}STATUS${csvseparator}SCORE"
 debug="false"                                       ## can be true/0 or false/1 | prints all history in output
 force_update="false"                                ## updates episodes to my anime list eaven if it reduces the episodes
 
@@ -200,12 +201,12 @@ search_anime() {
 update_local_db() {
     for i in ${aniline[0]} ;do 
         if [ X"$i" != X ] ;then
-            if grep -qE "^${aniline[0]};${aniline[1]}" "$anitrackdb" ; then
+            if grep -qE "^${aniline[0]}${csvseparator}${aniline[1]}" "$anitrackdb" ; then
                 histupdate "SET on ${aniline[1]} with id ${aniline[0]} in local db episodes done from $ck_ldb_epdone to ${aniline[2]}"
-                sed -i "s/^${aniline[0]};${aniline[1]}.*$/${aniline[0]};${aniline[1]};${aniline[2]}/" "$anitrackdb" || die "could not update $anitrackdb"
+                sed -i "s/^${aniline[0]};${aniline[1]}.*$/${aniline[0]}${csvseparator}${aniline[1]}${csvseparator}${aniline[2]}/" "$anitrackdb" || die "could not update $anitrackdb"
             else
                 histupdate "INSERT ${aniline[1]} with id ${aniline[0]} in local db. ${aniline[2]} episodes done"
-                echo "${aniline[0]};${aniline[1]};${aniline[2]}" >> "$anitrackdb" || die "could not update $anitrackdb"
+                echo "${aniline[0]}${csvseparator}${aniline[1]}${csvseparator}${aniline[2]}" >> "$anitrackdb" || die "could not update $anitrackdb"
             fi
         fi
     done
@@ -215,7 +216,7 @@ update_local_db() {
 
 bck_anilist() {
     bckfile="${backup_dir}/anilist_bck_${login_user}-$(date +"%Y%m%d-%H%M")" 
-    curl -s "${API_ENDPOINT}/users/@me/animelist?fields=list_status&limit=${maxlimit}${cnfsw}" -H "Authorization: Bearer ${bearer_token}" |jq -r '.data[] | "\(.node.id);\(.node.title | sub("\""; ""; "g"));\(.list_status.num_episodes_watched);\(.list_status.status);\(.list_status.score)"' |sort > "${bckfile}_tmp"
+    curl -s "${API_ENDPOINT}/users/@me/animelist?fields=list_status&limit=${maxlimit}${cnfsw}" -H "Authorization: Bearer ${bearer_token}" |jq -r --arg csvseparator "$csvseparator" '.data[] | "\(.node.id)ZZZZZ\(.node.title | sub("\""; ""; "g"))ZZZZZ\(.list_status.num_episodes_watched)ZZZZZ\(.list_status.status)ZZZZZ\(.list_status.score)" | gsub("ZZZZZ"; $csvseparator)' |sort > "${bckfile}_tmp"
     echo "$bckfheader" |cat - "${bckfile}_tmp" > "${bckfile}"
     rm -f "${bckfile}_tmp"
 #    bckfiles=($(ls -1 "${backup_dir}/anilist_bck_${login_user}"* |grep "[0-9]$" |sort -r))
@@ -237,9 +238,9 @@ parse_ani-cli_hist() {
     while read -r ani; do
         aniname="$(cut -d ' ' -f 2- <<< "$ani")"
         epdone="$(cut -d ' ' -f 1 <<< "$ani")"
-        ck_ldb="$(awk -F ";" -v ani="$aniname" '{if($2==ani) print $2}' "$anitrackdb")"
-        ck_ldb_epdone="$(awk -F ";" -v ani="$aniname" '{if($2==ani) print $3}' "$anitrackdb")"
-        ck_ldb_id="$(awk -F ";" -v ani="$aniname" '{if($2==ani) print $1}' "$anitrackdb")"
+        ck_ldb="$(awk -F "$csvseparator" -v ani="$aniname" '{if($2==ani) print $2}' "$anitrackdb")"
+        ck_ldb_epdone="$(awk -F "$csvseparator" -v ani="$aniname" '{if($2==ani) print $3}' "$anitrackdb")"
+        ck_ldb_id="$(awk -F "$csvseparator" -v ani="$aniname" '{if($2==ani) print $1}' "$anitrackdb")"
         ## if anime is already in local db
         if [ "$ck_ldb" == "$aniname" ] && [ X"$ck_ldb_epdone" != "$epdone" ] ; then
             if [ "$epdone" != "$ck_ldb_epdone" ] ;then
@@ -276,8 +277,25 @@ update_remote_db() {
 }
 
 restore_from_bck() {
-    echo "$lastbckf"
-    die "not implemented yet."
+    nrck='^[0-9]+$'
+    restore_file="$1"
+    [ ! -f "$restore_file" ] && die "restore file $restore_file not found"
+    csvck="$(grep -Ev "^#" "$restore_file" |awk -F "$csvseparator" '{if(NF!=5) exit 1}' ;echo $?)"
+    [ "$csvck" -ge 1 ] && die "restore file $restore_file does have more or less columns then it should have..."
+
+    allids="$(grep -Ev "^#" "$restore_file" "$bckfile" |awk -F "$csvseparator" '{print $1}' |sort -u)"
+    for i in $allids ;do
+        id="$i"
+        name="$(awk -F "$csvseparator" -v id="$id" '{if(id==$1)print $2}' "$bckfile" "$restore_file" |head -1 )"
+        latestep="$(awk -F "$csvseparator" -v id="$id" '{if(id==$1)print $3}' "$bckfile")"
+        lateststat="$(awk -F "$csvseparator" -v id="$id" '{if(id==$1)print $4}' "$bckfile")"
+        latestscore="$(awk -F "$csvseparator" -v id="$id" '{if(id==$1)print $5}' "$bckfile")"
+        bckep="$(awk -F "$csvseparator" -v id="$id" '{if(id==$1)print $3}' "$restore_file")"
+        bckstat="$(awk -F "$csvseparator" -v id="$id" '{if(id==$1)print $4}' "$restore_file")"
+        bckscore="$(awk -F "$csvseparator" -v id="$id" '{if(id==$1)print $5}' "$restore_file")"
+    done
+    
+
 }
 
 update_script() {
@@ -285,10 +303,10 @@ update_script() {
 }
 
 compare_mal_to_ldb() {
-    awk -F ";" '{print $1}' "$anitrackdb"| while IFS= read -r i ;do 
-        epdone_ldb="$(awk -F ";" -v id="$i" '{if(id==$1) print $3}' "$anitrackdb")"
-        epdone_rdb="$(awk -F ";" -v id="$i" '{if(id==$1) print $3}' "$bckfile")"
-        aniname="$(awk -F ";" -v id="$i" '{if(id==$1) print $2}' "$anitrackdb")"
+    awk -F "$csvseparator" '{print $1}' "$anitrackdb"| while IFS= read -r i ;do 
+        epdone_ldb="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $3}' "$anitrackdb")"
+        epdone_rdb="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $3}' "$bckfile")"
+        aniname="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $2}' "$anitrackdb")"
         if [ X"$epdone_rdb" != X ] ;then
             ## -gt only if epdone_ldb in not empty
             if [ "$epdone_ldb" -gt "$epdone_rdb" ] || [ "$force_update" == "true" ] ;then
