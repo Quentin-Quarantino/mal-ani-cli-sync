@@ -203,7 +203,7 @@ update_local_db() {
         if [ X"$i" != X ] ;then
             if grep -qE "^${aniline[0]}${csvseparator}${aniline[1]}" "$anitrackdb" ; then
                 histupdate "SET on ${aniline[1]} with id ${aniline[0]} in local db episodes done from $ck_ldb_epdone to ${aniline[2]}"
-                sed -i "s/^${aniline[0]};${aniline[1]}.*$/${aniline[0]}${csvseparator}${aniline[1]}${csvseparator}${aniline[2]}/" "$anitrackdb" || die "could not update $anitrackdb"
+                sed -i "s/^${aniline[0]}${csvseparator}${aniline[1]}.*$/${aniline[0]}${csvseparator}${aniline[1]}${csvseparator}${aniline[2]}/" "$anitrackdb" || die "could not update $anitrackdb"
             else
                 histupdate "INSERT ${aniline[1]} with id ${aniline[0]} in local db. ${aniline[2]} episodes done"
                 echo "${aniline[0]}${csvseparator}${aniline[1]}${csvseparator}${aniline[2]}" >> "$anitrackdb" || die "could not update $anitrackdb"
