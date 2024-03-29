@@ -282,20 +282,40 @@ restore_from_bck() {
     [ ! -f "$restore_file" ] && die "restore file $restore_file not found"
     csvck="$(grep -Ev "^#" "$restore_file" |awk -F "$csvseparator" '{if(NF!=5) exit 1}' ;echo $?)"
     [ "$csvck" -ge 1 ] && die "restore file $restore_file does have more or less columns then it should have..."
-
-    allids="$(grep -Ev "^#" "$restore_file" "$bckfile" |awk -F "$csvseparator" '{print $1}' |sort -u)"
-    for i in $allids ;do
-        id="$i"
-        name="$(awk -F "$csvseparator" -v id="$id" '{if(id==$1)print $2}' "$bckfile" "$restore_file" |head -1 )"
-        latestep="$(awk -F "$csvseparator" -v id="$id" '{if(id==$1)print $3}' "$bckfile")"
-        lateststat="$(awk -F "$csvseparator" -v id="$id" '{if(id==$1)print $4}' "$bckfile")"
-        latestscore="$(awk -F "$csvseparator" -v id="$id" '{if(id==$1)print $5}' "$bckfile")"
-        bckep="$(awk -F "$csvseparator" -v id="$id" '{if(id==$1)print $3}' "$restore_file")"
-        bckstat="$(awk -F "$csvseparator" -v id="$id" '{if(id==$1)print $4}' "$restore_file")"
-        bckscore="$(awk -F "$csvseparator" -v id="$id" '{if(id==$1)print $5}' "$restore_file")"
+    ## get ids of animes who will be deleted 
+    toaddaniid="$(awk -F "$csvseparator" 'NR==FNR{a[$1];next}!($1 in a){print $1}' "$bckfile" "$restore_file")"
+    ## get ids of animes that will be added
+    todelaniid="$(awk -F "$csvseparator" 'NR==FNR{a[$1];next}!($1 in a){print $1}' "$restore_file" "$bckfile")"
+    ## get ids of animes that changed 
+    tochaaniid="$(awk -F "$csvseparator" 'NR==FNR{a[$1,$3,$4,$5];next}!(($1,$3,$4,$5) in a){print $1}' "$bckfile" "$restore_file")"
+    for i in $todelaniid ;do 
+       animeep="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $2 "|" $3 }' "$bckfile")"
+       echo "${animeep%|*} with id $i and ${animeep##*|} episodes done will be deleted"
     done
-    
-
+    for i in $toaddaniid ;do
+        animeep="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $2 "|" $3 }' "$restore_file")"
+        echo "${animeep%|*} with id $i and ${animeep##*|} episodes done will be added"
+    done
+    for i in $tochaaniid ;do
+        mapfile -t -d  "$csvseparator" restore < <(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $0}' "$restore_file")
+        mapfile -t -d  "$csvseparator" actual_state < <(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $0}' "$bckfile")
+        printf "%s" "${restore[1]} with id $i change episode from ${actual_state[2]} to ${restore[2]}. state ${restore[3]} score ${restore[4]}"
+    done
+    echo "do you want to restore to that state? (y/Y)"
+    read -r -t 60 answer
+    if [ "$answer" == "y" ] || [ "$answer" == "Y" ] ;then
+        for i in $toaddaniid $tochaaniid ;do
+            mapfile -t -d "$csvseparator" restore < <(awk -F "$csvseparator" -v id="$i" '{if(id==$1)print $0}' "$restore_file")
+            echo "${restore[@]}"
+            #update_remote_db "${restore[0]}" "${restore[2]}" "${restore[3]}" "${restore[4]}"
+        done  
+        for i in $todelaniid ;do 
+            update_on_mal="$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "${BASE_URL}/${i}/my_list_status" -H "Authorization: Bearer ${bearer_token}")"
+            if [ "$update_on_mal" != "200" ] ;then
+                die "could not delete anime with id $i on mal"
+            fi            
+        done
+    fi
 }
 
 update_script() {
@@ -332,21 +352,14 @@ authorisation_code="" ;client_secret="" ;refresh_token="" ;bearer_token="" ;clie
 for i in "$@" ;do
     if [ "$i" == "-v" ] ;then
         debug="true"
+        set -- "${@//$i/}" ; set -- "${@#"${@%%[![:space:]]*}"}"
     elif [[ "$i" =~ -[v]+ ]] ;then
         set -x
         debug="true"
         trap "set +x" EXIT
+        set -- "${@//$i/}" ; set -- "${@#"${@%%[![:space:]]*}"}"
     fi
 done
-
-## if $@ == 'null|-h|--help' run manual and exit
-#para="$(sed 's/[[:space:]]+//g' <<< "$@")"
-for i in "$@" ;do
-    if [[ "$i" == "-h" || "$i" == "--help" || "$i" == "--" || "$i" == "--h" ]] ; then
-        manualPage
-        exit 0
-    fi
-done 
 
 echo "Checking dependencies..."
 dep_ch "fzf" "curl" "sed" "grep" "jq" "python3" "$web_browser" ||true 
@@ -424,7 +437,7 @@ if [ X"$login_user" == X ] || [ "$check_login" != 200 ] ;then
     fi
 fi
 
-echo -e "login successfull\nhi $login_user"
+echo -e "login successfull\nhi $login_user\n"
 
 bck_anilist
 parse_ani-cli_hist
