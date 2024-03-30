@@ -31,7 +31,7 @@ debug="false"                                       ## can be true/0 or false/1 
 force_update="false"                                ## updates episodes to my anime list eaven if it reduces the episodes
 
 ## check if not run as root 
-if [ "$(whoami)" == "${runas}" ] ;then
+if [ "$(whoami)" = "${runas}" ] ;then
     echo "script must not be runned as user $runas"
     exit 1
 fi
@@ -68,11 +68,11 @@ dep_ch() {
     plural=""
     for dep; do
         if ! command -v "$dep" >/dev/null ; then
-            if [ X"$missingdep" == "X" ] ;then
+            if [ X"$missingdep" = "X" ] ;then
                 missingdep="$dep"
             else
                 plural="s"
-                missingdep+=" $dep"
+                missingdep="$missingdep $dep+"
             fi
         fi
     done
@@ -92,7 +92,7 @@ create_challanger() {
     code_verifier="$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 128)"
     sed -i "s/code_challanger.*/code_challanger=$code_verifier/" "$secrets_file" || die "could not update code_challanger in secrets file"
     echo "new code_challanger updated"
-    source "$secrets_file"
+    . "$secrets_file"
 }
 
 get_auth_code() {
@@ -101,11 +101,13 @@ get_auth_code() {
     printf "<html>\n<body>\n<h1>Verification Succeeded!</h1>\n<p>Close this browser tab and you may now return to the shell.</p>\n</body>\n</html>\n" > "${wwwdir}"/index.html
     trap 'rm -rf -- "$wwwdir"' EXIT
     auth_url="${API_AUTH_ENDPOINT}authorize?response_type=code&client_id=${client_id}&code_challenge=${code_challanger}"
-    python3 -m http.server -d "$wwwdir" $redirectPort > "$tmpredirect" 2>&1 &
+    python3 -m http.server -d "$wwwdir" "$redirectPort" > "$tmpredirect" 2>&1 &
     wserver_pid="$!"
     "$web_browser" "$auth_url" >/dev/null 2>&1
-    echo -e "please authenticate in the web browser and press enter after allow it"
-    read -r -t "$timeout" _
+    printf "please authenticate in the web browser and press enter after allowing it\n"
+    (sleep "$timeout"; echo "timeout reached" >&2; exit 1) &
+    read -r _
+    kill "$!" >/dev/null 2>&1 || true
     unset _
     kill "$wserver_pid"
     check_www_srv="$(grep -i "Address already in use" "$tmpredirect")"
@@ -114,39 +116,40 @@ get_auth_code() {
         die "please check with 'sudo netstat -tlpn || sudo ss -4 -tlpn' if there is a service on port $redirectPort"
     fi
     auth_code="$(grep GET "$tmpredirect" |awk '{print $(NF-3)}' |awk -F= '{print $NF}' |tail -1)"
-    if [ X"$auth_code" == X ] || [ "$(wc -w <<< "$auth_code")" -ne 1 ] || [ "${#auth_code}" -lt 128 ] ; then 
+    auth_code_wc="$(echo "$auth_code" | wc -w)"
+    if [ X"$auth_code" = X ] || [ "$auth_code_wc" -ne 1 ] || [ "${#auth_code}" -lt 128 ] ; then 
         die "something went wrong... "
     fi
     sed -i "s/authorisation_code.*/authorisation_code=$auth_code/" "$secrets_file" || die "could not update authorisation_code in secrets file"
-    source "$secrets_file"
+    . "$secrets_file"
     acc=1
 }
 
 get_bearer_token() {
     URL="${API_AUTH_ENDPOINT}token"
     DATA="client_id=${client_id}"
-    DATA+="&client_secret=${client_secret}"
-    DATA+="&code=${authorisation_code}"
-    DATA+="&code_verifier=${code_challanger}"
-    DATA+="&grant_type=authorization_code"
+    DATA="${DATA}&client_secret=${client_secret}"
+    DATA="${DATA}&code=${authorisation_code}"
+    DATA="${DATA}&code_verifier=${code_challanger}"
+    DATA="${DATA}&grant_type=authorization_code"
 
-    if [ "$1" == "refresh" ] ;then
-        data="client_id=${client_id}"
-        data+="&client_secret=${client_secret}"
-        data+="&grant_type=refresh_token"
-        data+="&refresh_token=$refresh_token" 
+    if [ "$1" = "refresh" ] ;then
+        DATA="client_id=${client_id}"
+        DATA="${DATA}&client_secret=${client_secret}"
+        DATA="${DATA}&grant_type=refresh_token"
+        DATA="${DATA}&refresh_token=$refresh_token" 
     fi
 
     get_bt="$(curl -sfX POST "$URL" -d "$DATA")"
 
-    bt="$(jq -r '.access_token' <<< "$get_bt" 2>/dev/null)"
-    rt="$(jq -r '.refresh_token' <<< "$get_bt" 2>/dev/null)"
+    bt="$(echo "$get_bt" | jq -r '.access_token' 2>/dev/null)"
+    rt="$(echo "$get_bt" | jq -r '.refresh_token' 2>/dev/null)"
     
-    if [ X"$bt" == X ] || [ X"$rt" == X ] || [ "${#bt}" -lt 64 ] || [ "${#rt}" -lt 64 ] ;then
+    if [ X"$bt" = X ] || [ X"$rt" = X ] || [ "${#bt}" -lt 64 ] || [ "${#rt}" -lt 64 ] ;then
         die "could not get a valid bearer token"
     fi
     sed -i "s/bearer_token.*/bearer_token=$bt/;s/refresh_token.*/refresh_token=$rt/" "$secrets_file" || die "could not update bearer token in secrets file"
-    source "$secrets_file"
+    . "$secrets_file"
     [ "$1" != "refresh" ] && btc=1
 }
 
@@ -158,42 +161,47 @@ verify_login() {
 histupdate() {
     dt=$(date "+%Y-%m-%d %H:%M:%S")
     histline="${dt} : $1"
-    if [ "$debug" == "0" ] || [ "$debug" == "true" ] ;then
-        tee -a "$histfile" <<< "$histline"
+    if [ "$debug" = "0" ] || [ "$debug" = "true" ] ;then
+        echo "$histline" | tee -a "$histfile"
     else
-       echo "$histline" >> "$histfile"
+        echo "$histline" >> "$histfile"
     fi
 }
 
+
 search_anime() {
-    [ X"$slimit" == X ]&& slimit="$defslimit"
+    [ X"$slimit" = X ]&& slimit="$defslimit"
     ## prepare search querry: remove other options and double spaces etc
-    searchQuerry="$(sed "s/[[:space:]]\+-s[[:space:]]+//;s/-s //;s/ -l[[:space:]]\+[0-9]\+//;s/-o[[:space:]]+//;s/-l[[:space:]]\+[0-9]\+//;s/[[:space:]]\+/ /g;s/[[:space:]]/$wspace/g" <<< "$2")"
-    
-    histupdate "SEARCH $(sed 's/[[:space:]]\+-s[[:space:]]+//;s/-s //;s/ -l[[:space:]]\+[0-9]\+//;s/-l[[:space:]]\+[0-9]\+//' <<< "$2")" 
-    
+    searchQuerry="$(echo "$2" |sed "s/[[:space:]]\+-s[[:space:]]+//;s/-s //;s/ -l[[:space:]]\+[0-9]\+//;s/-o[[:space:]]+//;s/-l[[:space:]]\+[0-9]\+//;s/[[:space:]]\+/ /g;s/[[:space:]]/$wspace/g")"
+    histupdate "SEARCH $(echo "$2" |sed 's/[[:space:]]\+-s[[:space:]]+//;s/-s //;s/ -l[[:space:]]\+[0-9]\+//;s/-l[[:space:]]\+[0-9]\+//')" 
     ## if search querry is empty or have double space then return
-    if [ X"$searchQuerry" == "X" ] || [[ "$searchQuerry" =~ ^(%20)+$ && ! "$searchQuerry" =~ %20[^%]+%20 ]] ;then
+    #if [ X"$searchQuerry" = "X" ] || [[ "$searchQuerry" =~ ^(%20)+$ && ! "$searchQuerry" =~ %20[^%]+%20 ]] ;then
+    if [ X"$searchQuerry" = X ] || echo "$searchQuerry" | grep -Eq '^%20+$' 2>/dev/null && ! echo "$searchQuerry" | grep -Eq '%20[^%]+%20' 2>/dev/null ; then
         echo "search querry is empty or trash: $searchQuerry"
         return
     fi
+  
+
 
     DATA="q=${searchQuerry}"
-    DATA+="&limit=${slimit}"
-    DATA+="$cnfsw"
+    DATA="${DATA}&limit=${slimit}"
+    DATA="${DATA}${cnfsw}"
 
     curl -s "${BASE_URL}?${DATA}" -H "Authorization: Bearer ${bearer_token}" | jq . > "${tmpsearchf}"
     ## if file is empty then die 
     [ ! -s "${tmpsearchf}" ] && die "search results are empty... something went wrong. search querry was: $searchQuerry"
     ## grep in temp file for bad request and die if found 
-    [ "$(grep -o "bad_request" "${tmpsearchf}")" == "bad_request" ] && die "nothing found or bad request... try again"
+    if grep -qo "bad_request" "${tmpsearchf}" ;then
+        die "nothing found or bad request... try again"
+    fi
     #result="$(awk '{$1="";print}' <<< "$(printf "%s" "$(jq -r '.data[] | .node | [.title] | join(",")' "${tmpsearchf}")" | awk '{n++ ;print NR, $0}' | sed 's/^[[:space:]]//' | nth "Select anime: ")")"
-    malaniname="$(awk '{$1="";print}' <<< "$(printf "%s" "$(jq -r '.data[] | .node | [.title] | join(",")' "${tmpsearchf}")" | awk '{n++ ;print NR, $0}' | sed 's/^[[:space:]]//' | fzf --reverse --cycle --prompt "Search $2 with $1 episodes done: ")")"
-    if [ X"$malaniname" == X ] ; then
+    #malaniname="$(awk '{$1="";print}' <<< "$(printf "%s" "$(jq -r '.data[] | .node | [.title] | join(",")' "${tmpsearchf}")" | awk '{n++ ;print NR, $0}' | sed 's/^[[:space:]]//' | fzf --reverse --cycle --prompt "Search $2 with $1 episodes done: ")")"
+    malaniname="$(printf "%s" "$(jq -r '.data[] | .node | [.title] | join(",")' "${tmpsearchf}")" | awk '{n++ ;print NR, $0}' | sed 's/^[[:space:]]//' | fzf --reverse --cycle --prompt "Search $2 with $1 episodes done: " | awk '{$1="";print}' )"
+    if [ X"$malaniname" = X ] ; then
         echo "nothing selected, start next one"
     else
         malaniname="${malaniname#"${malaniname%%[![:space:]]*}"}"
-        aniid="$(jq --arg malaniname "$malaniname" '.data[] | .node | select(.title == $malaniname) | .id' "${tmpsearchf}")"
+        aniid="$(jq --arg malaniname "$malaniname" '.data[] | .node | select(.title = $malaniname) | .id' "${tmpsearchf}")"
         aniline=("$aniid" "$2" "$1")
     fi
 }
@@ -238,17 +246,17 @@ parse_ani-cli_hist() {
     while read -r ani; do
         aniname="$(cut -d ' ' -f 2- <<< "$ani")"
         epdone="$(cut -d ' ' -f 1 <<< "$ani")"
-        ck_ldb="$(awk -F "$csvseparator" -v ani="$aniname" '{if($2==ani) print $2}' "$anitrackdb")"
-        ck_ldb_epdone="$(awk -F "$csvseparator" -v ani="$aniname" '{if($2==ani) print $3}' "$anitrackdb")"
-        ck_ldb_id="$(awk -F "$csvseparator" -v ani="$aniname" '{if($2==ani) print $1}' "$anitrackdb")"
+        ck_ldb="$(awk -F "$csvseparator" -v ani="$aniname" '{if($2=ani) print $2}' "$anitrackdb")"
+        ck_ldb_epdone="$(awk -F "$csvseparator" -v ani="$aniname" '{if($2=ani) print $3}' "$anitrackdb")"
+        ck_ldb_id="$(awk -F "$csvseparator" -v ani="$aniname" '{if($2=ani) print $1}' "$anitrackdb")"
         ## if anime is already in local db
-        if [ "$ck_ldb" == "$aniname" ] && [ X"$ck_ldb_epdone" != "$epdone" ] ; then
+        if [ "$ck_ldb" = "$aniname" ] && [ X"$ck_ldb_epdone" != "$epdone" ] ; then
             if [ "$epdone" != "$ck_ldb_epdone" ] ;then
                 aniline=("${ck_ldb_id}" "${ck_ldb}" "${epdone}")
                 update_local_db
             fi
         ## if anime is not in local db
-        elif [ X"$ck_ldb" == X ] ; then #[[ "$ck_ldb" =~ " " ]] || [[ ! "$ck_ldb" =~ ^-?[0-9]+$ ]] || [[ ! "$ck_ldb" =~ $'\n' ]];then
+        elif [ X"$ck_ldb" = X ] ; then #[[ "$ck_ldb" =~ " " ]] || [[ ! "$ck_ldb" =~ ^-?[0-9]+$ ]] || [[ ! "$ck_ldb" =~ $'\n' ]];then
             search_anime "$epdone" "$aniname"
             update_local_db
         ## if local db has 2 entrys to the same anime, print error and continue
@@ -283,29 +291,29 @@ restore_from_bck() {
     csvck="$(grep -Ev "^#" "$restore_file" |awk -F "$csvseparator" '{if(NF!=5) exit 1}' ;echo $?)"
     [ "$csvck" -ge 1 ] && die "restore file $restore_file does have more or less columns then it should have..."
     ## get ids of animes who will be deleted 
-    toaddaniid="$(awk -F "$csvseparator" 'NR==FNR{a[$1];next}!($1 in a){print $1}' "$bckfile" "$restore_file")"
+    toaddaniid="$(awk -F "$csvseparator" 'NR=FNR{a[$1];next}!($1 in a){print $1}' "$bckfile" "$restore_file")"
     ## get ids of animes that will be added
-    todelaniid="$(awk -F "$csvseparator" 'NR==FNR{a[$1];next}!($1 in a){print $1}' "$restore_file" "$bckfile")"
+    todelaniid="$(awk -F "$csvseparator" 'NR=FNR{a[$1];next}!($1 in a){print $1}' "$restore_file" "$bckfile")"
     ## get ids of animes that changed 
-    tochaaniid="$(awk -F "$csvseparator" 'NR==FNR{a[$1,$3,$4,$5];next}!(($1,$3,$4,$5) in a){print $1}' "$bckfile" "$restore_file")"
+    tochaaniid="$(awk -F "$csvseparator" 'NR=FNR{a[$1,$3,$4,$5];next}!(($1,$3,$4,$5) in a){print $1}' "$bckfile" "$restore_file")"
     for i in $todelaniid ;do 
-       animeep="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $2 "|" $3 }' "$bckfile")"
+       animeep="$(awk -F "$csvseparator" -v id="$i" '{if(id=$1) print $2 "|" $3 }' "$bckfile")"
        echo "${animeep%|*} with id $i and ${animeep##*|} episodes done will be deleted"
     done
     for i in $toaddaniid ;do
-        animeep="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $2 "|" $3 }' "$restore_file")"
+        animeep="$(awk -F "$csvseparator" -v id="$i" '{if(id=$1) print $2 "|" $3 }' "$restore_file")"
         echo "${animeep%|*} with id $i and ${animeep##*|} episodes done will be added"
     done
     for i in $tochaaniid ;do
-        mapfile -t -d  "$csvseparator" restore < <(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $0}' "$restore_file")
-        mapfile -t -d  "$csvseparator" actual_state < <(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $0}' "$bckfile")
+        mapfile -t -d  "$csvseparator" restore < <(awk -F "$csvseparator" -v id="$i" '{if(id=$1) print $0}' "$restore_file")
+        mapfile -t -d  "$csvseparator" actual_state < <(awk -F "$csvseparator" -v id="$i" '{if(id=$1) print $0}' "$bckfile")
         printf "%s" "${restore[1]} with id $i change episode from ${actual_state[2]} to ${restore[2]}. state ${restore[3]} score ${restore[4]}"
     done
     echo "do you want to restore to that state? (y/Y)"
     read -r -t 60 answer
-    if [ "$answer" == "y" ] || [ "$answer" == "Y" ] ;then
+    if [ "$answer" = "y" ] || [ "$answer" = "Y" ] ;then
         for i in $toaddaniid $tochaaniid ;do
-            mapfile -t -d "$csvseparator" restore < <(awk -F "$csvseparator" -v id="$i" '{if(id==$1)print $0}' "$restore_file")
+            mapfile -t -d "$csvseparator" restore < <(awk -F "$csvseparator" -v id="$i" '{if(id=$1)print $0}' "$restore_file")
             echo "${restore[@]}"
             #update_remote_db "${restore[0]}" "${restore[2]}" "${restore[3]}" "${restore[4]}"
         done  
@@ -324,12 +332,12 @@ update_script() {
 
 compare_mal_to_ldb() {
     awk -F "$csvseparator" '{print $1}' "$anitrackdb"| while IFS= read -r i ;do 
-        epdone_ldb="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $3}' "$anitrackdb")"
-        epdone_rdb="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $3}' "$bckfile")"
-        aniname="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $2}' "$anitrackdb")"
+        epdone_ldb="$(awk -F "$csvseparator" -v id="$i" '{if(id=$1) print $3}' "$anitrackdb")"
+        epdone_rdb="$(awk -F "$csvseparator" -v id="$i" '{if(id=$1) print $3}' "$bckfile")"
+        aniname="$(awk -F "$csvseparator" -v id="$i" '{if(id=$1) print $2}' "$anitrackdb")"
         if [ X"$epdone_rdb" != X ] ;then
             ## -gt only if epdone_ldb in not empty
-            if [ "$epdone_ldb" -gt "$epdone_rdb" ] || [ "$force_update" == "true" ] ;then
+            if [ "$epdone_ldb" -gt "$epdone_rdb" ] || [ "$force_update" = "true" ] ;then
                  echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done"
                  update_remote_db "$i" "$epdone_ldb"
             fi
@@ -350,7 +358,7 @@ get_recomendations() {
 authorisation_code="" ;client_secret="" ;refresh_token="" ;bearer_token="" ;client_id="" ;code_challanger=""
 
 for i in "$@" ;do
-    if [ "$i" == "-v" ] ;then
+    if [ "$i" = "-v" ] ;then
         debug="true"
         set -- "${@//$i/}" ; set -- "${@#"${@%%[![:space:]]*}"}"
     elif [[ "$i" =~ -[v]+ ]] ;then
@@ -390,7 +398,7 @@ else
 fi
 
 ## die when api client id and secrets is epmty
-if [ X"$client_id" == X ] || [ X"$client_secret" == X ] ;then
+if [ X"$client_id" = X ] || [ X"$client_secret" = X ] ;then
     die "client_id and/or client_secret are empty. please add it to $secrets_file"
 fi
 
@@ -404,14 +412,14 @@ if [ ! -f "$anitrackdb" ] || [ ! -r "$anitrackdb" ] ;then
     touch "$anitrackdb" || die "could not create $anitrackdb"
 fi
 
-if [ "$nsfw" == "true" ] || [ "$nsfw" == "0" ] ;then
+if [ "$nsfw" = "true" ] || [ "$nsfw" = "0" ] ;then
     cnfsw="&nsfw=true"
 else
     cnfsw=""
 fi
 
 ## check if challanger, auth code or bearer token is present or run functions to create 
-if [ X"$code_challanger" == X ] || [ X"$authorisation_code" == X ] || [ X"$bearer_token" == X ] ;then 
+if [ X"$code_challanger" = X ] || [ X"$authorisation_code" = X ] || [ X"$bearer_token" = X ] ;then 
     create_challanger
     get_auth_code
     get_bearer_token
@@ -419,7 +427,7 @@ fi
 
 verify_login
 
-if [ X"$login_user" == X ] || [ "$check_login" != 200 ] ;then
+if [ X"$login_user" = X ] || [ "$check_login" != 200 ] ;then
     echo "login was not successfull"
     if [ X"$refresh_token" != X ] ;then
         echo "try to refresh the bearer token"
@@ -437,7 +445,8 @@ if [ X"$login_user" == X ] || [ "$check_login" != 200 ] ;then
     fi
 fi
 
-echo -e "login successfull\nhi $login_user\n"
+printf "login successful\nhi %s\n" "$login_user"
+
 
 bck_anilist
 parse_ani-cli_hist
@@ -449,7 +458,7 @@ while getopts "fl:urUR:" opt ;do
             ;;
         l)
             slimit="$(grep -Eo "[0-9]+" <<< "OPTARG$")"
-            if [ "$slimit" != "0" ] || [ X"$slimit" == X ] ; then
+            if [ "$slimit" != "0" ] || [ X"$slimit" = X ] ; then
                 echo "set search limit: $slimit"
             elif [ "$slimit" -gt "$maxlimit" ]; then
                 histupdate "ERROR search limit of the api is $maxlimit"
