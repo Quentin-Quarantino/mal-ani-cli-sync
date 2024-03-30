@@ -310,7 +310,9 @@ restore_from_bck() {
         printf "%s" "${restore[1]} with id $i change episode from ${actual_state[2]} to ${restore[2]}. state ${restore[3]} score ${restore[4]}"
     done
     echo "do you want to restore to that state? (y/Y)"
-    read -r -t 60 answer
+    (sleep "$timeout"; echo "timeout reached" >&2; exit 1) &
+    read -r answer
+    kill "$!" >/dev/null 2>&1 || true
     if [ "$answer" = "y" ] || [ "$answer" = "Y" ] ;then
         for i in $toaddaniid $tochaaniid ;do
             mapfile -t -d "$csvseparator" restore < <(awk -F "$csvseparator" -v id="$i" '{if(id=$1)print $0}' "$restore_file")
