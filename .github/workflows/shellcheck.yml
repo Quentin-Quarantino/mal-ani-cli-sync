@@ -21,7 +21,7 @@ jobs:
       run: |
         chmod +x "./ani-track-v2.sh"
 
-    - name: Run ShellCheck on myscript.sh
+    - name: Run ShellCheck
       run: |
         sudo apt-get install shellcheck
-        shellcheck "./ani-track-v2.sh"
+        shellcheck -s sh -o all -e 2250 "./ani-track-v2.sh"
