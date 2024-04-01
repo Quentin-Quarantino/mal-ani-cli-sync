@@ -15,21 +15,24 @@ secrets_file="${workdir}/.secrets"
 backup_dir="${workdir}/backup"
 anitrackdb="${workdir}/anidb.csv"
 redirectPort="8080"
-deftype="anime" ## default type can be at the moment only anime. the api supports also manga
 API_AUTH_ENDPOINT="https://myanimelist.net/v1/oauth2/"
 API_ENDPOINT="https://api.myanimelist.net/v2"
-BASE_URL="$API_ENDPOINT/${deftype}"
+BASE_URL="$API_ENDPOINT/anime"
 web_browser="firefox"
 timeout=120
-wspace='%20' ## white space can be + or %20
-defslimit="40"
-maxlimit="1000" ## max limit of the api for anime recomendations its 100 atm
+defslimit=$(($(tput lines) - 3))
+## max limit of the api for anime recomendations its 100 atm
+maxlimit="1000"
 maxrecomendlimit="100"
-nsfw="true"      ## needed for gray and black flagged anime like spy x famaly 2...
-csvseparator="|" ## ; does not work becuse of "steins;gate"
+## needed for gray and black flagged anime like spy x famaly 2...
+nsfw="true"
+## ; does not work becuse of "steins;gate"
+csvseparator="|"
 bckfheader="##ID${csvseparator}TITLE${csvseparator}NUM_EPISODES_WATCHED${csvseparator}STATUS${csvseparator}SCORE"
-debug="false"        ## can be true/0 or false/1 | prints all history in output
-force_update="false" ## updates episodes to my anime list eaven if it reduces the episodes
+## can be true/0 or false/1 | prints all history in output
+debug="false"
+## updates episodes to my anime list eaven if it reduces the episodes
+force_update="false"
 
 if [ "$USER" = "${runas}" ]; then
     echo "script must not be runned as user $runas"
@@ -39,22 +42,27 @@ fi
 ## functions
 manualPage() {
     printf "
-%s version: $version
 
 usage:
-    %s [options] [query]
-    %s [options] [query] [options]
+    %s [options]
+    %s [options] [argument] [options]
 
 Options:
-    -[v]+ verbose levels
-    -f    force
+    -u       update MAL watchlist from ani-cli watchlist
+    -r       get recomendations based on the MAL watchlist
+    -s       get seasonal animes
+    -l 0-9   set search limit. default is $defslimit (terminal height -3)
+    -f       force update if it will reduce episode on MAL watchlist
+    -U       update script
+    -R file  restore MAL watchlist from backup
+    -[v]+    verbose levels
 
 Example:
-    %s -s demon slayer -l 10
-    %s -s one piece -w 1045
-    %s -s chainsaw -w ++
-    %s -o shippu -f 4
+    %s -u
+    %s -r -l 80
     %s -U 
+
+%s version: $version
 \n\n" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}"
 }
 
@@ -98,7 +106,7 @@ create_challanger() {
 get_auth_code() {
     touch "$tmpredirect"
     mkdir "$wwwdir"
-    printf "<html>\n<body>\n<h1>Verification Succeeded!</h1>\n<p>Close this browser tab and you may now return to the shell.</p>\n</body>\n</html>\n" >"${wwwdir}"/index.html
+    printf "<html>\n<body>\n<h1>Verification Succeeded!</h1>\n<p>Close this browser tab and return to the shell.</p>\n</body>\n</html>\n" >"${wwwdir}"/index.html
     trap 'rm -rf -- "$wwwdir"' EXIT
     auth_url="${API_AUTH_ENDPOINT}authorize?response_type=code&client_id=${client_id}&code_challenge=${code_challanger}"
     python3 -m http.server -d "$wwwdir" "$redirectPort" >"$tmpredirect" 2>&1 &
@@ -117,7 +125,7 @@ get_auth_code() {
     check_www_srv="$(grep -i "Address already in use" "$tmpredirect")"
     if [ X"$check_www_srv" != X ]; then
         echo "$redirectPort port was already in use"
-        die "please check with 'sudo netstat -tlpn || sudo ss -4 -tlpn' if there is a service on port $redirectPort"
+        die "please check with 'sudo netstat -tlpn || sudo ss -4 -tlpn' if there is a service on port $redirectPort or copy the code from the url and paste it in $secrets_file on the auth_code variable"
     fi
     auth_code="$(grep GET "$tmpredirect" | awk '{print $(NF-3)}' | awk -F= '{print $NF}' | tail -1)"
     auth_code_wc="$(echo "$auth_code" | wc -w)"
@@ -175,7 +183,7 @@ histupdate() {
 search_anime() {
     [ X"$slimit" = X ] && slimit="$defslimit"
     ## prepare search querry: remove other options and double spaces etc
-    searchQuerry="$(echo "$2" | sed "s/[[:space:]]\+-s[[:space:]]+//;s/-s //;s/ -l[[:space:]]\+[0-9]\+//;s/-o[[:space:]]+//;s/-l[[:space:]]\+[0-9]\+//;s/[[:space:]]\+/ /g;s/[[:space:]]/$wspace/g")"
+    searchQuerry="$(echo "$2" | sed "s/[[:space:]]\+-s[[:space:]]+//;s/-s //;s/ -l[[:space:]]\+[0-9]\+//;s/-o[[:space:]]+//;s/-l[[:space:]]\+[0-9]\+//;s/[[:space:]]\+/ /g;s/[[:space:]]/%20/g")"
     histupdate "SEARCH $(echo "$2" | sed 's/[[:space:]]\+-s[[:space:]]+//;s/-s //;s/ -l[[:space:]]\+[0-9]\+//;s/-l[[:space:]]\+[0-9]\+//' || true)"
     ## if search querry is empty or have double space then return
     #if [ X"$searchQuerry" = "X" ] || [[ "$searchQuerry" =~ ^(%20)+$ && ! "$searchQuerry" =~ %20[^%]+%20 ]]; then
@@ -330,7 +338,6 @@ restore_from_bck() {
     kill "$!" >/dev/null 2>&1 || true
     if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
         for i in $toaddaniid $tochaaniid; do
-            #mapfile -t -d "$csvseparator" restore < <(awk -F "$csvseparator" -v id="$i" '{if(id=$1)print $0}' "$restore_file")
             ep_restore="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $3}' "$restore_file")"
             state_restore="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $4}' "$restore_file")"
             score_restore="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $5}' "$restore_file")"
@@ -368,8 +375,87 @@ compare_mal_to_ldb() {
 }
 
 get_recomendations() {
-    echo "$maxrecomendlimit"
-    die "not implemented yet."
+    echo
+    unset genre
+    [ X"$slimit" = X ] && slimit="$defslimit"
+    [ "$slimit" -gt "$maxrecomendlimit" ] && slimit="$maxrecomendlimit"
+    DATA="limit=${slimit}"
+    DATA="${DATA}&fields=id,title,alternative_titles,synopsis,genres,mean,reank,start_date,end_date,status"
+    DATA="${DATA}${cnfsw}"
+    curl -s "${BASE_URL}/suggestions?${DATA}" -H "Authorization: Bearer ${bearer_token}" | jq . >"${tmpsearchf}"
+    while [ "$genre" != "exit" ] && [ "$anime" != "exit" ]; do
+        genre="$({
+            echo "all"
+            jq -r '.data[] | .node | .genres[] | .name' "${tmpsearchf}" | sort -u
+            echo "exit"
+        } | awk '{ if (NR==1) print NR, $0; else print NR, $0 }' | fzf --reverse --cycle --prompt "select a genre for the recomendation: " | awk '{$1="";print}' | sed -e 's/^[[:space:]]*//' || true)"
+        [ X"$genre" = X ] && die "no genre selected"
+        if [ "$genre" = "all" ] && [ "$genre" != "exit" ]; then
+            anime="$({
+                jq -r '.data[] | .node | .title' "${tmpsearchf}"
+                echo "exit"
+            } | awk '{n++ ;print NR, $0}' | fzf --reverse --cycle --prompt "select a anime for more informations: " | awk '{$1="";print}' | sed -e 's/^[[:space:]]*//' || true)"
+        fi
+        if [ "$genre" != "all" ] && [ "$genre" != "exit" ]; then
+            anime="$({
+                jq -r --arg genre "$genre" '.data[] | select(.node.genres[].name == $genre) | .node | .title' "${tmpsearchf}"
+                echo "exit"
+            } | awk '{n++ ;print NR, $0}' | fzf --reverse --cycle --prompt "select a anime for more informations: " | awk '{$1="";print}' | sed -e 's/^[[:space:]]*//' || true)"
+        fi
+        if [ X"$anime" != X ] && [ "$genre" != "exit" ] && [ "$anime" != "exit" ]; then
+            alttitles="$(jq -r --arg anime "$anime" '.data[] | select(.node.title == $anime) | .node | .alternative_titles | .synonyms[] ' "${tmpsearchf}" | paste -sd ', ')"
+            animesynopsis="$(jq -r --arg anime "$anime" '.data[] | select(.node.title == $anime) | .node | .synopsis' "${tmpsearchf}")"
+            animegenres="$(jq -r --arg anime "$anime" '.data[] | select(.node.title == $anime) | .node | .genres[] | .name ' "${tmpsearchf}" | paste -sd ', ')"
+            animeranking="$(jq -r --arg anime "$anime" '.data[] | select(.node.title == $anime) | .node | .mean' "${tmpsearchf}")"
+            startdate="$(jq -r --arg anime "$anime" '.data[] | select(.node.title == $anime) | .node | .start_date' "${tmpsearchf}")"
+            enddate="$(jq -r --arg anime "$anime" '.data[] | select(.node.title == $anime) | .node | .end_date' "${tmpsearchf}")"
+            animestatus="$(jq -r --arg anime "$anime" '.data[] | select(.node.title == $anime) | .node | .status' "${tmpsearchf}")"
+
+            printf "\e[36mtitle:\e[0m %s\n" "$anime"
+            printf "\e[36malternative titles:\e[0m %s\n" "$alttitles"
+            printf "\e[36msynopsis:\e[0m %s\n\n" "$animesynopsis"
+            printf "\e[36mgenres:\e[0m %s\n" "$animegenres"
+            printf "\e[36mranking:\e[0m %.2f\n" "$animeranking"
+            printf "\e[36mstart date:\e[0m %s\n" "$startdate"
+            printf "\e[36mend date:\e[0m %s\n" "$enddate"
+            printf "\e[36mstatus:\e[0m %s\n" "$animestatus"
+            echo
+            printf "a - add to MAL watchlist\nw - watch with ani-cli\nc/none - go back to the recomendations\nq - quit\n"
+            (
+                sleep "$timeout"
+                echo "timeout reached" >&2
+                exit 1
+            ) &
+            read -r answer
+            kill "$!" >/dev/null 2>&1 || true
+            case "$answer" in
+                a)
+                    genre="exit"
+                    aniid="$(jq -r --arg anime "$anime" '.data[] | select(.node.title == $anime) | .node | .id' "${tmpsearchf}")"
+                    echo "MAL add anime $anime with id $aniid and status 'plan to watch'"
+                    update_remote_db "$aniid" "0" "plan_to_watch"
+                    ;;
+                w)
+                    genre="exit"
+                    ani_cli="$(command -v ani-cli 2>/dev/null)"
+                    if [ X"$ani_cli" != X ]; then
+                        # shellcheck disable=SC2086
+                        exec $ani_cli $anime
+                    else
+                        die "ani-cli not found in \$PATH"
+                    fi
+                    ;;
+                c | "")
+                    echo
+                    unset anime
+                    unset genre
+                    ;;
+                q | *)
+                    anime="exit"
+                    ;;
+            esac
+        fi
+    done
 }
 
 get_seasonal_animes() {
@@ -486,7 +572,7 @@ while getopts "fl:urUR:vs" opt; do
             slimit="$(echo "$OPTARG" | grep -Eo "[0-9]+")"
             if [ "$slimit" != "0" ] || [ X"$slimit" = X ]; then
                 echo "set search limit: $slimit"
-            elif [ "$slimit" -gt "$maxlimit" ]; then
+            elif [ "$slimit" -gt "$maxlimit" ] || [ "$defslimit" -gt "$maxlimit" ]; then
                 histupdate "ERROR search limit of the api is $maxlimit"
                 defslimit="$maxlimit"
             else

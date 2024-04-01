@@ -4,12 +4,18 @@ ani-track is a shell script to update animes on myanimelist from the [ani-cli](h
 **The script is not fully developed. use at your own risk**
 
 ## TODO
-- [ ] restore MAL watchlist from backup
+- [x] restore MAL watchlist from backup
 - [ ] help page
-- [ ] option parsing
+- [x] option parsing
 - [ ] better history
 - [ ] update MAL score and watch status of new animes
 - [ ] change script name
 - [ ] update script function
 - [ ] readme.md, dev and protected main/master branch
-- [ ] anime recomendations based on watchlist
+- [x] anime recomendations based on watchlist
+- [ ] update function for the script
+
+
+
+
+how to create a MAL API OAuth 2.0 client ID and secret: [MAL Blog Post](https://myanimelist.net/blog.php?eid=835707)
