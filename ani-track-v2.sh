@@ -1,41 +1,8 @@
 #!/bin/sh
 # shellcheck source=/dev/null
 
-## VARS
-version="0.1"
-runas="root"
-workdir="${XDG_STATE_HOME:-$HOME/.local/state}/ani-track"
-ani_cli_hist="${XDG_STATE_HOME:-$HOME/.local/state}/ani-cli/ani-hsts"
-tmpsearchf="${workdir}/search-tmp"
-tmpinfof="${workdir}/info-tmp"
-histfile="${workdir}/ani-track.hist"
-wwwdir="${workdir}/tmp-www"
-tmpredirect="${workdir}/redirectoutput"
-secrets_file="${workdir}/.secrets"
-backup_dir="${workdir}/backup"
-anitrackdb="${workdir}/anidb.csv"
-redirectPort="8080"
-API_AUTH_ENDPOINT="https://myanimelist.net/v1/oauth2/"
-API_ENDPOINT="https://api.myanimelist.net/v2"
-BASE_URL="$API_ENDPOINT/anime"
-web_browser="firefox"
-timeout=120
-defslimit=$(($(tput lines) - 3))
-## max limit of the api for anime recomendations its 100 atm
-maxlimit="1000"
-maxrecomendlimit="100"
-## needed for gray and black flagged anime like spy x famaly 2...
-nsfw="true"
-## ; does not work becuse of "steins;gate"
-csvseparator="|"
-bckfheader="##ID${csvseparator}TITLE${csvseparator}NUM_EPISODES_WATCHED${csvseparator}STATUS${csvseparator}SCORE"
-## can be true/0 or false/1 | prints all history in output
-debug="false"
-## updates episodes to my anime list eaven if it reduces the episodes
-force_update="false"
-
-if [ "$USER" = "${runas}" ]; then
-    echo "script must not be runned as user $runas"
+if [ "$USER" = "root" ]; then
+    echo "script must not be run as root"
     exit 1
 fi
 
@@ -91,7 +58,7 @@ dep_ch() {
 }
 
 create_secrets() {
-    touch "$secrets_file" || die "could not create secrets file: touch $secrets_file"
+    : >"$secrets_file" || die "could not create secrets file: touch $secrets_file"
     printf "client_id=\nclient_secret=\ncode_challanger=\nauthorisation_code=\nbearer_token=\nrefresh_token=\n" >"$secrets_file"
     die "add your api client id and the secret in the $secrets_file and re-run the script"
 }
@@ -104,7 +71,7 @@ create_challanger() {
 }
 
 get_auth_code() {
-    touch "$tmpredirect"
+    : >"$tmpredirect"
     mkdir "$wwwdir"
     printf "<html>\n<body>\n<h1>Verification Succeeded!</h1>\n<p>Close this browser tab and return to the shell.</p>\n</body>\n</html>\n" >"${wwwdir}"/index.html
     trap 'rm -rf -- "$wwwdir"' EXIT
@@ -353,7 +320,18 @@ restore_from_bck() {
 }
 
 update_script() {
-    die "not implemented yet."
+    update="$(curl -s -A 'Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124' "$updateurl")" || die "could not get updates. check connectivity"
+    update="$(printf "%s\n" "$update" | diff -u "$0" -)"
+    if [ -z "$update" ]; then
+        echo "script is up to date"
+    else
+        if printf "%s\n" "$update" | patch "$0" -; then
+            echo "script updated"
+        else
+            die "could not update. check permissions"
+        fi
+    fi
+    exit 0
 }
 
 compare_mal_to_ldb() {
@@ -462,6 +440,39 @@ get_seasonal_animes() {
     die "not implemented yet."
 }
 
+## VARS
+version="0.1"
+workdir="${XDG_STATE_HOME:-$HOME/.local/state}/ani-track"
+ani_cli_hist="${XDG_STATE_HOME:-$HOME/.local/state}/ani-cli/ani-hsts"
+tmpsearchf="${workdir}/search-tmp"
+tmpinfof="${workdir}/info-tmp"
+histfile="${workdir}/ani-track.hist"
+wwwdir="${workdir}/tmp-www"
+tmpredirect="${workdir}/redirectoutput"
+secrets_file="${workdir}/.secrets"
+backup_dir="${workdir}/backup"
+anitrackdb="${workdir}/anidb.csv"
+redirectPort="8080"
+API_AUTH_ENDPOINT="https://myanimelist.net/v1/oauth2/"
+API_ENDPOINT="https://api.myanimelist.net/v2"
+BASE_URL="$API_ENDPOINT/anime"
+web_browser="firefox"
+timeout=120
+defslimit=$(($(tput lines) - 3))
+## max limit of the api for anime recomendations its 100 atm
+maxlimit="1000"
+maxrecomendlimit="100"
+## needed for gray and black flagged anime like spy x famaly 2...
+nsfw="true"
+## ; does not work becuse of "steins;gate"
+csvseparator="|"
+bckfheader="##ID${csvseparator}TITLE${csvseparator}NUM_EPISODES_WATCHED${csvseparator}STATUS${csvseparator}SCORE"
+## can be true/0 or false/1 | prints all history in output
+debug="false"
+## updates episodes to my anime list eaven if it reduces the episodes
+force_update="false"
+updateurl="https://raw.githubusercontent.com/Quentin-Quarantino/ani-track/main/ani-track-v2.sh"
+
 ### main
 
 ## do set the vars in the .secrets file. only for shellcheck https://www.shellcheck.net/wiki/SC2154
@@ -493,7 +504,7 @@ fi
 
 ## create temp files and trap for cleanup
 for i in "$tmpsearchf" "$tmpinfof" "$tmpredirect"; do
-    touch "$i" || die "could not create temp file: touch $i"
+    : >"$i" || die "could not create temp file: touch $i"
 done
 trap 'rm -f -- "$tmpsearchf" "$tmpinfof" "$tmpredirect"' EXIT
 
@@ -522,7 +533,7 @@ fi
 
 ## create $anitrackdb or die
 if [ ! -f "$anitrackdb" ] || [ ! -r "$anitrackdb" ]; then
-    touch "$anitrackdb" || die "could not create $anitrackdb"
+    : >"$anitrackdb" || die "could not create $anitrackdb"
 fi
 
 if [ "$nsfw" = "true" ] || [ "$nsfw" = "0" ]; then
