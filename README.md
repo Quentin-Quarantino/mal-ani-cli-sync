@@ -16,7 +16,7 @@ ani-track is a shell script to update animes on myanimelist from the [ani-cli](h
 - [ ] get seasonal animes
 - [ ] get {pre-}sequel of animes that are in watchlist
 - [ ] if a anime is completed set the status eather
-
+- [ ] custom config
 
 
 how to create a MAL API OAuth 2.0 client ID and secret: [MAL Blog Post](https://myanimelist.net/blog.php?eid=835707)
