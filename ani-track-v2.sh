@@ -200,7 +200,7 @@ bck_anilist() {
     bckfiles="$(find "${backup_dir}" -maxdepth 1 -type f -name "anilist_bck_${login_user}*" -regex '.*[0-9]+$' -printf "%p\n" | sort -r)"
     countbackups="$(echo "$bckfiles" | wc -w)"
     if [ "$countbackups" -ge 2 ]; then
-        lastbckf="$(echo "${bckfiles}" | cut -d ' ' -f 2)"
+        lastbckf="$(echo "$bckfiles" | sed -n '2 p')"
         if diff -q "$lastbckf" "$bckfile" >/dev/null 2>&1; then
             histupdate "no changes since last backup"
             rm -f "$bckfile"
