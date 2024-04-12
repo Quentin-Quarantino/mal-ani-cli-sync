@@ -8,15 +8,14 @@ fi
 
 ## functions
 manualPage() {
-    printf "
-
+    echo "
 usage:
-    %s [options]
-    %s [options] [argument] [options]
+    ${0##*/} [options]
+    ${0##*/} [options] [argument] [options]
 
 Options:
     -u       update MAL watchlist from ani-cli watchlist
-    -r       get recomendations based on the MAL watchlist
+    -r       get recommendations based on the MAL watchlist
     -s       get seasonal animes
     -l 0-9   set search limit. default is $defslimit (terminal height -3)
     -f       force update if it will reduce episode on MAL watchlist
@@ -25,12 +24,12 @@ Options:
     -[v]+    verbose levels
 
 Example:
-    %s -u
-    %s -r -l 80
-    %s -U 
+    ${0##*/} -u
+    ${0##*/} -r -l 80
+    ${0##*/} -U 
 
-%s version: $version
-\n\n" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}"
+${0##*/} version: $version
+"
 }
 
 die() {
@@ -59,8 +58,14 @@ dep_ch() {
 
 create_secrets() {
     : >"$secrets_file" || die "could not create secrets file: touch $secrets_file"
-    printf "client_id=\nclient_secret=\ncode_challanger=\nauthorisation_code=\nbearer_token=\nrefresh_token=\n" >"$secrets_file"
+    printf "client_id=\nclient_secret=\ncode_challanger=\nauthorisation_code=\nbearer_token=\nrefresh_token=\ntoken_date=\n" >"$secrets_file"
     die "add your api client id and the secret in the $secrets_file and re-run the script"
+}
+
+create_config() {
+    : >"$configfile" || die "could not create config file: touch $configfile"
+    # shellcheck disable=SC2016
+    printf '## used web browser for authentification\n#web_browser="firefox"\n## port for web server to get the auth code from oauth2.0\n#redirectPort="8080"\n## login timeout in sec\n#timeout=120\n## default search limit \n#defslimit=$(($(tput lines) - 3))\n## needed for gray and black flagged anime like spy x famaly 2...\n#nsfw="true"\n## can be true/0 or false/1 | prints all history in output\n#debug="false"\n## updates episodes to my anime list eaven if it reduces the episodes\n#force_update="false"\n## bearer token and refresh token are 32 days valid.\n#daysbevorerefresh="26"' >"$configfile"
 }
 
 create_challanger() {
@@ -127,7 +132,7 @@ get_bearer_token() {
     if [ X"$bt" = X ] || [ X"$rt" = X ] || [ "${#bt}" -lt 64 ] || [ "${#rt}" -lt 64 ]; then
         die "could not get a valid bearer token"
     fi
-    sed -i "s/bearer_token.*/bearer_token=$bt/;s/refresh_token.*/refresh_token=$rt/" "$secrets_file" || die "could not update bearer token in secrets file"
+    sed -i "s/bearer_token.*/bearer_token=$bt/;s/refresh_token.*/refresh_token=$rt/;s/token_date.*/token_date=$current_date/" "$secrets_file" || die "could not update bearer token in secrets file"
     . "$secrets_file"
     [ "$1" != "refresh" ] && btc=1
 }
@@ -194,7 +199,7 @@ update_local_db() {
 
 bck_anilist() {
     bckfile="${backup_dir}/anilist_bck_${login_user}-$(date +"%Y%m%d-%H%M")"
-    curl -s "${API_ENDPOINT}/users/@me/animelist?fields=list_status&limit=${maxlimit}${cnfsw}" -H "Authorization: Bearer ${bearer_token}" | jq -r --arg csvseparator "$csvseparator" '.data[] | "\(.node.id)ZZZZZ\(.node.title | sub("\""; ""; "g"))ZZZZZ\(.list_status.num_episodes_watched)ZZZZZ\(.list_status.status)ZZZZZ\(.list_status.score)" | gsub("ZZZZZ"; $csvseparator)' | sort >"${bckfile}_tmp"
+    curl -s "${API_ENDPOINT}/users/@me/animelist?fields=list_status,num_episodes&limit=${maxlimit}${cnfsw}" -H "Authorization: Bearer ${bearer_token}" | jq -r --arg csvseparator "$csvseparator" '.data[] | "\(.node.id)ZZZZZ\(.node.title | sub("\""; ""; "g"))ZZZZZ\(.list_status.num_episodes_watched)ZZZZZ\(.list_status.status)ZZZZZ\(.list_status.score)ZZZZZ\(.node.num_episodes)" | gsub("ZZZZZ"; $csvseparator)' | sort >"${bckfile}_tmp"
     echo "$bckfheader" | cat - "${bckfile}_tmp" >"${bckfile}"
     rm -f "${bckfile}_tmp"
     bckfiles="$(find "${backup_dir}" -maxdepth 1 -type f -name "anilist_bck_${login_user}*" -regex '.*[0-9]+$' -printf "%p\n" | sort -r)"
@@ -259,8 +264,10 @@ update_remote_db() {
 restore_from_bck() {
     restore_file="$1"
     [ ! -f "$restore_file" ] && die "restore file $restore_file not found"
+    getbckcolnr="$(echo "$bckfheader" | grep -o "$csvseparator" | wc -l)"
+    getbckcolnr=$((getbckcolnr + 1))
     csvck="$(
-        grep -Ev "^#" "$restore_file" | awk -F "$csvseparator" '{if(NF!=5) exit 1}'
+        grep -Ev "^#" "$restore_file" | awk -F "$csvseparator" -v colcount="$getbckcolnr" '{if(NF!=$colcount) exit 1}'
         echo $?
     )"
     [ "$csvck" -ge 1 ] && die "restore file $restore_file does have more or less columns then it should have..."
@@ -338,16 +345,34 @@ compare_mal_to_ldb() {
     awk -F "$csvseparator" '{print $1}' "$anitrackdb" | while IFS= read -r i; do
         epdone_ldb="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $3}' "$anitrackdb")"
         epdone_rdb="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $3}' "$bckfile")"
+        ep_max="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $6}' "$bckfile")"
+        current_status="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $4}' "$bckfile")"
         aniname="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $2}' "$anitrackdb")"
         if [ X"$epdone_rdb" != X ]; then
             ## -gt only if epdone_ldb in not empty
             if [ "$epdone_ldb" -gt "$epdone_rdb" ] || [ "$force_update" = "true" ]; then
-                echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done"
-                update_remote_db "$i" "$epdone_ldb"
+                if [ "$ep_max" = "$epdone_ldb" ]; then
+                    echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done and set anime as completed"
+                    update_remote_db "$i" "$epdone_ldb" "completed"
+                elif [ "$current_status" = "plan_to_watch" ] && [ "$epdone_rdb" -ge 1 ]; then
+                    echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done and set anime as watching"
+                    update_remote_db "$i" "$epdone_ldb" "watching"
+                else
+                    echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done"
+                    update_remote_db "$i" "$epdone_ldb"
+                fi
             fi
         else
-            echo "MAL add anime $aniname with id $i and $epdone_ldb episodes done"
-            update_remote_db "$i" "$epdone_ldb"
+            if [ "$ep_max" = "$epdone_ldb" ]; then
+                echo "MAL add anime $aniname with id $i and $epdone_ldb episodes done and set anime as completed"
+                update_remote_db "$i" "$epdone_ldb" "completed"
+            elif [ "$current_status" = "plan_to_watch" ] && [ "$epdone_rdb" -ge 1 ]; then
+                echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done and set anime as watching"
+                update_remote_db "$i" "$epdone_ldb" "watching"
+            else
+                echo "MAL add anime $aniname with id $i and $epdone_ldb episodes done"
+                update_remote_db "$i" "$epdone_ldb"
+            fi
         fi
     done
 }
@@ -447,6 +472,7 @@ ani_cli_hist="${XDG_STATE_HOME:-$HOME/.local/state}/ani-cli/ani-hsts"
 tmpsearchf="${workdir}/search-tmp"
 tmpinfof="${workdir}/info-tmp"
 histfile="${workdir}/ani-track.hist"
+configfile="${workdir}/ani-track.conf"
 wwwdir="${workdir}/tmp-www"
 tmpredirect="${workdir}/redirectoutput"
 secrets_file="${workdir}/.secrets"
@@ -466,12 +492,14 @@ maxrecomendlimit="100"
 nsfw="true"
 ## ; does not work becuse of "steins;gate"
 csvseparator="|"
-bckfheader="##ID${csvseparator}TITLE${csvseparator}NUM_EPISODES_WATCHED${csvseparator}STATUS${csvseparator}SCORE"
+bckfheader="##ID${csvseparator}TITLE${csvseparator}EPISODES_WATCHED${csvseparator}STATUS${csvseparator}SCORE${csvseparator}EPISODES"
 ## can be true/0 or false/1 | prints all history in output
 debug="false"
 ## updates episodes to my anime list eaven if it reduces the episodes
 force_update="false"
 updateurl="https://raw.githubusercontent.com/Quentin-Quarantino/ani-track/main/ani-track-v2.sh"
+current_date=$(date +%Y-%m-%d)
+daysbevorerefresh="26"
 
 ### main
 
@@ -482,6 +510,7 @@ refresh_token=""
 bearer_token=""
 client_id=""
 code_challanger=""
+token_date=""
 
 for i in "$@"; do
     if [ "$i" = "-v" ]; then
@@ -490,6 +519,9 @@ for i in "$@"; do
         set -x
         debug="true"
         trap "set +x" EXIT
+    elif [ "$i" = "-h" ] || [ "$i" = "--help" ]; then
+        manualPage
+        exit 0
     fi
 done
 
@@ -510,15 +542,23 @@ trap 'rm -f -- "$tmpsearchf" "$tmpinfof" "$tmpredirect"' EXIT
 
 ## create secrets if not exists
 [ ! -s "$secrets_file" ] && create_secrets
+[ ! -s "$configfile" ] && create_config
 
 ## check if there is other stuff then vars in secrets file
 check_secrets="$(grep -Ev '^([[:alpha:]_]+)=.*$|^([[:alpha:]_]+)=$|^[[:space:]]+|^$|^#' "$secrets_file")"
+check_config="$(grep -Ev '^([[:alpha:]_]+)=.*$|^([[:alpha:]_]+)=$|^[[:space:]]+|^$|^#' "$configfile")"
 
 ## source if $check_secrets is epmty
 if [ -z "$check_secrets" ]; then
     . "$secrets_file"
 else
     die "check you're secrets file becuse it can contain commands. Please remove everything thats not vars"
+fi
+
+if [ -z "$check_config" ]; then
+    . "$configfile"
+else
+    echo "config file contains commands. please remove it or create a issue on github"
 fi
 
 ## die when api client id and secrets is epmty
@@ -541,6 +581,7 @@ if [ "$nsfw" = "true" ] || [ "$nsfw" = "0" ]; then
 else
     cnfsw=""
 fi
+difference_days=$((($(date -d "${current_date}" +%s) - $(date -d "${token_date}" +%s)) / 86400))
 
 ## check if challanger, auth code or bearer token is present or run functions to create
 if [ X"$code_challanger" = X ] || [ X"$authorisation_code" = X ] || [ X"$bearer_token" = X ]; then
@@ -551,20 +592,20 @@ fi
 
 verify_login
 
-if [ X"$login_user" = X ] || [ "$check_login" != 200 ]; then
-    echo "login was not successfull"
+if [ X"$login_user" = X ] || [ "$check_login" != 200 ] || [ "$difference_days" -ge "$daysbevorerefresh" ]; then
+    echo "login was not successfull or token is too old"
     if [ X"$refresh_token" != X ]; then
         echo "try to refresh the bearer token"
         get_bearer_token "refresh"
         verify_login
     fi
-    if [ "$btc" != 1 ] || [ "$acc" != 1 ] || [ "$check_login" != 200 ]; then
+    if [ "$btc" != 1 ] && [ "$check_login" != 200 ] || [ "$acc" != 1 ] && [ "$check_login" != 200 ]; then
         echo "recreate new bearer token"
         create_challanger
         get_auth_code
         get_bearer_token
         verify_login
-    else
+    elif [ "$btc" = 1 ] || [ "$acc" = 1 ]; then
         die "could not login\nplease check you're api secrets"
     fi
 fi
