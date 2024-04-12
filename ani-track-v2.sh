@@ -199,7 +199,7 @@ update_local_db() {
 
 bck_anilist() {
     bckfile="${backup_dir}/anilist_bck_${login_user}-$(date +"%Y%m%d-%H%M")"
-    curl -s "${API_ENDPOINT}/users/@me/animelist?fields=list_status,num_episodes&limit=${maxlimit}${cnfsw}" -H "Authorization: Bearer ${bearer_token}" | jq -r --arg csvseparator "$csvseparator" '.data[] | "\(.node.id)ZZZZZ\(.node.title | sub("\""; ""; "g"))ZZZZZ\(.list_status.num_episodes_watched)ZZZZZ\(.list_status.status)ZZZZZ\(.list_status.score)ZZZZZ\(.num_episodes)" | gsub("ZZZZZ"; $csvseparator)' | sort >"${bckfile}_tmp"
+    curl -s "${API_ENDPOINT}/users/@me/animelist?fields=list_status,num_episodes&limit=${maxlimit}${cnfsw}" -H "Authorization: Bearer ${bearer_token}" | jq -r --arg csvseparator "$csvseparator" '.data[] | "\(.node.id)ZZZZZ\(.node.title | sub("\""; ""; "g"))ZZZZZ\(.list_status.num_episodes_watched)ZZZZZ\(.list_status.status)ZZZZZ\(.list_status.score)ZZZZZ\(.node.num_episodes)" | gsub("ZZZZZ"; $csvseparator)' | sort >"${bckfile}_tmp"
     echo "$bckfheader" | cat - "${bckfile}_tmp" >"${bckfile}"
     rm -f "${bckfile}_tmp"
     bckfiles="$(find "${backup_dir}" -maxdepth 1 -type f -name "anilist_bck_${login_user}*" -regex '.*[0-9]+$' -printf "%p\n" | sort -r)"
@@ -346,6 +346,7 @@ compare_mal_to_ldb() {
         epdone_ldb="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $3}' "$anitrackdb")"
         epdone_rdb="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $3}' "$bckfile")"
         ep_max="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $6}' "$bckfile")"
+        current_status="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $4}' "$bckfile")"
         aniname="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $2}' "$anitrackdb")"
         if [ X"$epdone_rdb" != X ]; then
             ## -gt only if epdone_ldb in not empty
@@ -353,6 +354,9 @@ compare_mal_to_ldb() {
                 if [ "$ep_max" = "$epdone_ldb" ]; then
                     echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done and set anime as completed"
                     update_remote_db "$i" "$epdone_ldb" "completed"
+                elif [ "$current_status" = "plan_to_watch" ] && [ "$epdone_rdb" -ge 1 ]; then
+                    echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done and set anime as watching"
+                    update_remote_db "$i" "$epdone_ldb" "watching"
                 else
                     echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done"
                     update_remote_db "$i" "$epdone_ldb"
@@ -362,6 +366,9 @@ compare_mal_to_ldb() {
             if [ "$ep_max" = "$epdone_ldb" ]; then
                 echo "MAL add anime $aniname with id $i and $epdone_ldb episodes done and set anime as completed"
                 update_remote_db "$i" "$epdone_ldb" "completed"
+            elif [ "$current_status" = "plan_to_watch" ] && [ "$epdone_rdb" -ge 1 ]; then
+                echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done and set anime as watching"
+                update_remote_db "$i" "$epdone_ldb" "watching"
             else
                 echo "MAL add anime $aniname with id $i and $epdone_ldb episodes done"
                 update_remote_db "$i" "$epdone_ldb"
