@@ -65,7 +65,7 @@ create_secrets() {
 create_config() {
     : >"$configfile" || die "could not create config file: touch $configfile"
     # shellcheck disable=SC2016
-    printf '## used web browser for authentification\n#web_browser="firefox"\n## port for web server to get the auth code from oauth2.0\n#redirectPort="8080"\n## login timeout in sec\n#timeout=120\n## default search limit \n#defslimit=$(($(tput lines) - 3))\n## needed for gray and black flagged anime like spy x famaly 2...\n#nsfw="true"\n## can be true/0 or false/1 | prints all history in output\n#debug="false"\n## updates episodes to my anime list eaven if it reduces the episodes\n#force_update="false"\n## bearer token and refresh token are 32 days valid.\n#daysbevorerefresh="26"' >"$configfile"
+    printf '## used web browser for authentification\n#web_browser="firefox"\n## port for web server to get the auth code from oauth2.0\n#redirectPort="8080"\n## login timeout in sec\n#timeout=120\n## default search limit \n#defslimit=$(($(tput lines) - 3))\n## needed for gray and black flagged anime like spy x famaly 2...\n#nsfw="true"\n## can be true/0 or false/1 | prints all history in output\n#debug="false"\n## updates episodes to my anime list eaven if it reduces the episodes\n#force_update="false"\n## bearer token and refresh token are 32 days valid.\n#daysbevorerefresh="26"\n' >"$configfile"
 }
 
 create_challanger() {
@@ -233,10 +233,12 @@ parse_ani_cli_hist() {
         ## if anime is not in local db
         elif [ X"$ck_ldb" = X ]; then #[[ "$ck_ldb" =~ " " ]] || [[ ! "$ck_ldb" =~ ^-?[0-9]+$ ]] || [[ ! "$ck_ldb" =~ $'\n' ]];then
             search_anime "$epdone" "$aniname"
-            update_local_db "${ck_ldb_id}" "${ck_ldb}" "${epdone}"
+            if [ X"$ck_ldb_id" != X ] || [ X"$ck_ldb" != X ]; then
+                update_local_db "${ck_ldb_id}" "${ck_ldb}" "${epdone}"
+            else
+                echo "skip insert $aniname"
+            fi
         ## if local db has 2 entrys to the same anime, print error and continue
-        #elif [[ "$ck_ldb" =~ " " ]] || [[ ! "$ck_ldb" =~ ^-?[0-9]+$ ]] || [[ ! "$ck_ldb" =~ $'\n' ]];then
-        #elif echo "$ck_ldb" | grep -q " " || ! echo "$ck_ldb" | grep -qE '^(-?[0-9]+)$' || ! echo "$ck_ldb" | grep -q $'\n'; then
         elif echo "$ck_ldb" | grep -q " " || ! echo "$ck_ldb" | grep -qE '^(-?[0-9]+)$' || ! printf '%s\n' "$ck_ldb" | grep -q '^'; then
             printf "%s" "error: $ani found twice or more in $anitrackdb\nplease check the $anitrackdb\n"
             histupdate "ERROR multiple enttrys found with name $aniname. please check $anitrackdb"
@@ -249,15 +251,17 @@ parse_ani_cli_hist() {
 }
 
 update_remote_db() {
-    unset DATA
-    DATA=" -d num_watched_episodes=${2}"
-    [ -n "$3" ] && DATA="${DATA} -d status=${3}"
-    [ -n "$4" ] && DATA="${DATA} -d score=${4}"
-    ## disable SC2086 on this line becuse of $DATA should not be in quotes. otherwise the anime can't be updated
-    # shellcheck disable=SC2086
-    update_on_mal="$(curl -s -o /dev/null -w "%{http_code}" -X PUT "${BASE_URL}/${1}/my_list_status" $DATA -H "Authorization: Bearer ${bearer_token}" --data-urlencode 'score=8')"
-    if [ "$update_on_mal" != "200" ]; then
-        die "could not update anime with id $1 on mal"
+    if [ X"$1" != X ]; then
+        unset DATA
+        DATA=" -d num_watched_episodes=${2}"
+        [ -n "$3" ] && DATA="${DATA} -d status=${3}"
+        [ -n "$4" ] && DATA="${DATA} -d score=${4}"
+        ## disable SC2086 on this line becuse of $DATA should not be in quotes. otherwise the anime can't be updated
+        # shellcheck disable=SC2086
+        update_on_mal="$(curl -s -o /dev/null -w "%{http_code}" -X PUT "${BASE_URL}/${1}/my_list_status" $DATA -H "Authorization: Bearer ${bearer_token}" --data-urlencode 'score=8')"
+        if [ "$update_on_mal" != "200" ]; then
+            die "could not update anime with id $1 on mal"
+        fi
     fi
 }
 
@@ -522,6 +526,8 @@ for i in "$@"; do
     elif [ "$i" = "-h" ] || [ "$i" = "--help" ]; then
         manualPage
         exit 0
+    elif [ "$i" = "-U" ]; then
+        update_script
     fi
 done
 
@@ -615,7 +621,7 @@ printf "login successful\nhi %s\n" "$login_user"
 bck_anilist
 parse_ani_cli_hist
 
-while getopts "fl:urUR:vs" opt; do
+while getopts "fl:urR:vs" opt; do
     case $opt in
         f)
             force_update="true"
@@ -639,9 +645,6 @@ while getopts "fl:urUR:vs" opt; do
             ;;
         s)
             get_seasonal_animes
-            ;;
-        U)
-            update_script
             ;;
         R)
             restore_from_bck "$OPTARG"
