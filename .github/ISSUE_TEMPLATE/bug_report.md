@@ -31,7 +31,7 @@ assignees: ''
 **Environment**
 
     OS: [Operating System name and version]
-    Script Version: [specify the version of the script] 
+    Script Version: [specify the version of the script]
     Browser: [used Browser for authentification if the bug is OAuth2.0 related]
 
 **Additional Information**
