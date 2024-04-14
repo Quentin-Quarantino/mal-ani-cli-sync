@@ -7,7 +7,7 @@ on:
       - main
   pull_request:
     paths:
-      - '**ani-track-v2.sh'
+      - '**mal-ani-cli-sync.sh'
 
 jobs:
   sh-checker:
@@ -27,5 +27,5 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: test exec bit
-      run: test -x "./ani-track-v2.sh"
+      run: test -x "./mal-ani-cli-sync.sh"
 
