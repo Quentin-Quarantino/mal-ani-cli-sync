@@ -471,12 +471,12 @@ get_seasonal_animes() {
 
 ## VARS
 version="0.1"
-workdir="${XDG_STATE_HOME:-$HOME/.local/state}/ani-track"
+workdir="${XDG_STATE_HOME:-$HOME/.local/state}/mal-ani-cli-sync"
 ani_cli_hist="${XDG_STATE_HOME:-$HOME/.local/state}/ani-cli/ani-hsts"
 tmpsearchf="${workdir}/search-tmp"
 tmpinfof="${workdir}/info-tmp"
-histfile="${workdir}/ani-track.hist"
-configfile="${workdir}/ani-track.conf"
+histfile="${workdir}/mal-ani-cli-sync.hist"
+configfile="${workdir}/mal-ani-cli-sync.conf"
 wwwdir="${workdir}/tmp-www"
 tmpredirect="${workdir}/redirectoutput"
 secrets_file="${workdir}/.secrets"
@@ -501,7 +501,7 @@ bckfheader="##ID${csvseparator}TITLE${csvseparator}EPISODES_WATCHED${csvseparato
 debug="false"
 ## updates episodes to my anime list eaven if it reduces the episodes
 force_update="false"
-updateurl="https://raw.githubusercontent.com/Quentin-Quarantino/ani-track/main/ani-track-v2.sh"
+updateurl="https://raw.githubusercontent.com/Quentin-Quarantino/mal-ani-cli-sync/mal-ani-cli-sync.sh"
 current_date=$(date +%Y-%m-%d)
 daysbevorerefresh="26"
 
