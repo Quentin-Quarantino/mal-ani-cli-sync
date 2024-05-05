@@ -347,37 +347,45 @@ update_script() {
 
 compare_mal_to_ldb() {
     awk -F "$csvseparator" '{print $1}' "$anitrackdb" | while IFS= read -r i; do
-        epdone_ldb="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $3}' "$anitrackdb")"
+        epdone_ldb="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $3}' "$anitrackdb" | tail -1)"
         epdone_rdb="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $3}' "$bckfile")"
         ep_max="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $6}' "$bckfile")"
         current_status="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $4}' "$bckfile")"
-        aniname="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $2}' "$anitrackdb")"
+        aniname="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $2}' "$anitrackdb" | tail -1)"
+        ani_score="$(awk -F "$csvseparator" -v id="$i" '{if(id==$1) print $5}' "$bckfile")"
+        [ X"$ani_score" = X ] && ani_score="0"
+        ## if the anime is in backup
         if [ X"$epdone_rdb" != X ]; then
             ## -gt only if epdone_ldb in not empty
             if [ "$epdone_ldb" -gt "$epdone_rdb" ] || [ "$force_update" = "true" ]; then
                 if [ "$ep_max" = "$epdone_ldb" ]; then
                     echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done and set anime as completed"
-                    update_remote_db "$i" "$epdone_ldb" "completed"
+                    update_remote_db "$i" "$epdone_ldb" "completed" "$ani_score"
                 elif [ "$current_status" = "plan_to_watch" ] && [ "$epdone_rdb" -ge 1 ]; then
                     echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done and set anime as watching"
-                    update_remote_db "$i" "$epdone_ldb" "watching"
+                    update_remote_db "$i" "$epdone_ldb" "watching" "$ani_score"
+                elif [ "$current_status" = "dropped" ]; then
+                    echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done and keep anime as dropped"
+                    update_remote_db "$i" "$epdone_ldb" "dropped" "$ani_score"
                 else
                     echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done"
-                    update_remote_db "$i" "$epdone_ldb"
+                    update_remote_db "$i" "$epdone_ldb" "watching" "$ani_score"
                 fi
             fi
+        ## if the anime is not in backup
         else
             if [ "$ep_max" = "$epdone_ldb" ]; then
                 echo "MAL add anime $aniname with id $i and $epdone_ldb episodes done and set anime as completed"
-                update_remote_db "$i" "$epdone_ldb" "completed"
+                update_remote_db "$i" "$epdone_ldb" "completed" "$ani_score"
             elif [ "$current_status" = "plan_to_watch" ] && [ "$epdone_rdb" -ge 1 ]; then
                 echo "MAL update anime $aniname with id $i from $epdone_rdb to $epdone_ldb episodes done and set anime as watching"
-                update_remote_db "$i" "$epdone_ldb" "watching"
+                update_remote_db "$i" "$epdone_ldb" "watching" "$ani_score"
             else
                 echo "MAL add anime $aniname with id $i and $epdone_ldb episodes done"
-                update_remote_db "$i" "$epdone_ldb"
+                update_remote_db "$i" "$epdone_ldb" "watching" "$ani_score"
             fi
         fi
+        unset ani_score
     done
 }
 
